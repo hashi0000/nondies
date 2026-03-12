@@ -1,0 +1,22 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Game state (players list + current gameweek)
+    // Any signed-in user can read. Any signed-in user can write
+    // (admin PIN gates the UI — no server-side admin claims needed for a club app).
+    match /gameState/{doc} {
+      allow read:  if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // Teams — one document per user, keyed by their Firebase UID.
+    // Any signed-in user can read all teams (leaderboard).
+    // A user can only write their own team document.
+    match /teams/{uid} {
+      allow read:  if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == uid;
+    }
+  }
+}

@@ -22,9 +22,12 @@ import Image from "next/image";
 import Link from "next/link";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import {
+  addDoc,
   collection,
   doc,
+  deleteDoc,
   onSnapshot,
+  serverTimestamp,
   setDoc,
   updateDoc,
   writeBatch,
@@ -65,7 +68,9 @@ type SavedTeam = {
   captain: number | null;
   viceCaptain: number | null;
   keeper: number | null;
-  cumulativePoints: number;
+  cumulativePoints?: number;
+  createdBy?: string;
+  createdAt?: unknown;
 };
 
 type BuilderState = {
@@ -84,11 +89,6 @@ const APP_NAME = "Nondies Fantasy League";
 const ADMIN_PIN = "1234";
 const SQUAD_SIZE = 11;
 const BUDGET = 100;
-
-const LS = {
-  builder: "nondies-fantasy.builder.v1",
-  admin: "nondies-fantasy.admin.v1",
-} as const;
 
 const SEEDED_PLAYERS: Player[] = [
   { id: 1,  name: "Arfan Ahmed",             price: 15, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
@@ -133,11 +133,6 @@ const SEEDED_PLAYERS: Player[] = [
 function clampNonNegativeInt(n: number) {
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.floor(n));
-}
-
-function safeParseJson<T>(raw: string | null): T | null {
-  if (!raw) return null;
-  try { return JSON.parse(raw) as T; } catch { return null; }
 }
 
 function money(n: number) { return `£${n}`; }
@@ -343,7 +338,7 @@ export default function Page() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
 
-  // Draft builder — localStorage only
+  // Draft builder — in-memory (Firestore is source of truth for roster & teams)
   const [builder, setBuilder] = useState<BuilderState>({ teamName: "", selected: [], captain: null, viceCaptain: null, keeper: null });
 
   // Admin
@@ -365,21 +360,66 @@ export default function Page() {
   // Save team state
   const [savingTeam, setSavingTeam] = useState(false);
 
-  // Firestore: listen to gameState/current
+  // Firestore: listen to current gameweek
   useEffect(() => {
     const gsRef = doc(db, "gameState", "current");
     const unsub = onSnapshot(gsRef, (snap) => {
       if (snap.exists()) {
         const data = snap.data();
-        const p = (data.players as Player[] | undefined) ?? SEEDED_PLAYERS;
-        const normalized = p.map((pl) => ({ ...pl, history: pl.history ?? [] }));
-        setPlayers(normalized);
-        setLocalPlayers(normalized);
         setCurrentGameweek(data.currentGameweek ?? 1);
       } else {
         // First run — initialize with seed data
-        void setDoc(gsRef, { players: SEEDED_PLAYERS, currentGameweek: 1 });
+        void setDoc(gsRef, { currentGameweek: 1 });
       }
+      setFsReady(true);
+    }, () => setFsReady(true));
+    return () => unsub();
+  }, []);
+
+  // Firestore: listen to players collection (single source of truth)
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "players"), (snap) => {
+      const list = snap.docs
+        .map((d) => {
+          const data = d.data() as any;
+          return {
+            id: Number(d.id),
+            name: String(data.name ?? ""),
+            price: Number(data.price ?? 0),
+            runs: Number(data.runs ?? 0),
+            wickets: Number(data.wickets ?? 0),
+            catches: Number(data.catches ?? 0),
+            wkCatches: Number(data.wkCatches ?? 0),
+            stumpings: Number(data.stumpings ?? 0),
+            runOuts: Number(data.runOuts ?? 0),
+            available: Boolean(data.available ?? true),
+            history: Array.isArray(data.history) ? data.history : [],
+          } satisfies Player;
+        })
+        .filter((p) => Number.isFinite(p.id) && p.name);
+
+      if (list.length === 0) {
+        // Seed Firestore roster once (fresh project)
+        const batch = writeBatch(db);
+        for (const p of SEEDED_PLAYERS) {
+          batch.set(doc(db, "players", String(p.id)), {
+            name: p.name,
+            price: p.price,
+            runs: p.runs,
+            wickets: p.wickets,
+            catches: p.catches,
+            wkCatches: p.wkCatches,
+            stumpings: p.stumpings,
+            runOuts: p.runOuts,
+            available: p.available,
+          });
+        }
+        void batch.commit();
+        return;
+      }
+
+      list.sort((a, b) => a.id - b.id);
+      setPlayers(list);
       setFsReady(true);
     }, () => setFsReady(true));
     return () => unsub();
@@ -403,27 +443,7 @@ export default function Page() {
     return () => unsub();
   }, [router]);
 
-  // Hydrate builder + adminAuthed from localStorage
-  useEffect(() => {
-    const savedBuilder = safeParseJson<BuilderState>(localStorage.getItem(LS.builder));
-    const savedAdmin = safeParseJson<{ authed: boolean }>(localStorage.getItem(LS.admin));
-    if (savedBuilder && Array.isArray(savedBuilder.selected)) {
-      setBuilder({
-        teamName: String(savedBuilder.teamName ?? ""),
-        selected: savedBuilder.selected.map(Number).filter(Number.isFinite),
-        captain: savedBuilder.captain ?? null,
-        viceCaptain: savedBuilder.viceCaptain ?? null,
-        keeper: savedBuilder.keeper ?? null,
-      });
-    }
-    if (savedAdmin?.authed) setAdminAuthed(true);
-  }, []);
-
-  // Persist builder + admin to localStorage
-  useEffect(() => { localStorage.setItem(LS.builder, JSON.stringify(builder)); }, [builder]);
-  useEffect(() => { localStorage.setItem(LS.admin, JSON.stringify({ authed: adminAuthed })); }, [adminAuthed]);
-
-  // Sync localPlayers when Firestore updates AND admin has no unsaved changes
+  // Keep admin edit buffer in sync with Firestore unless they have unsaved edits
   useEffect(() => {
     if (!unsavedStats) setLocalPlayers(players);
   }, [players, unsavedStats]);
@@ -537,15 +557,15 @@ export default function Page() {
     if (locked || !validation.ok || !authUser) return;
     setSavingTeam(true);
     try {
-      const existingTeam = teams.find((t) => t.uid === authUser.uid);
-      await setDoc(doc(db, "teams", authUser.uid), {
-        uid: authUser.uid,
+      await addDoc(collection(db, "teams"), {
         name: builder.teamName.trim(),
         players: [...builder.selected],
         captain: builder.captain,
         viceCaptain: builder.viceCaptain,
         keeper: builder.keeper,
-        cumulativePoints: existingTeam?.cumulativePoints ?? 0,
+        createdBy: authUser.uid,
+        createdAt: serverTimestamp(),
+        cumulativePoints: 0,
       });
       setBuilder((prev) => ({ ...prev, teamName: "" }));
       setTab("leaderboard");
@@ -573,7 +593,25 @@ export default function Page() {
   async function saveStats() {
     setSavingStats(true);
     try {
-      await setDoc(doc(db, "gameState", "current"), { players: localPlayers, currentGameweek }, { merge: true });
+      const batch = writeBatch(db);
+      for (const p of localPlayers) {
+        batch.set(
+          doc(db, "players", String(p.id)),
+          {
+            name: p.name,
+            price: p.price,
+            runs: p.runs,
+            wickets: p.wickets,
+            catches: p.catches,
+            wkCatches: p.wkCatches,
+            stumpings: p.stumpings,
+            runOuts: p.runOuts,
+            available: p.available,
+          },
+          { merge: true },
+        );
+      }
+      await batch.commit();
       setUnsavedStats(false);
       setSavedStatsFlash(true);
       setTimeout(() => setSavedStatsFlash(false), 2000);
@@ -586,7 +624,11 @@ export default function Page() {
     const updated = localPlayers.map((p) => ({ ...p, available: val }));
     setLocalPlayers(updated);
     setUnsavedStats(false);
-    await setDoc(doc(db, "gameState", "current"), { players: updated, currentGameweek }, { merge: true });
+    const batch = writeBatch(db);
+    for (const p of updated) {
+      batch.update(doc(db, "players", String(p.id)), { available: p.available });
+    }
+    await batch.commit();
   }
 
   async function addPlayer() {
@@ -611,7 +653,17 @@ export default function Page() {
     setNewName("");
     setNewPrice(5);
     setUnsavedStats(false);
-    await setDoc(doc(db, "gameState", "current"), { players: updated, currentGameweek }, { merge: true });
+    await setDoc(doc(db, "players", String(newPlayer.id)), {
+      name: newPlayer.name,
+      price: newPlayer.price,
+      runs: 0,
+      wickets: 0,
+      catches: 0,
+      wkCatches: 0,
+      stumpings: 0,
+      runOuts: 0,
+      available: true,
+    });
   }
 
   async function deletePlayer(id: number) {
@@ -619,7 +671,7 @@ export default function Page() {
     const updated = localPlayers.filter((p) => p.id !== id);
     setLocalPlayers(updated);
     setUnsavedStats(false);
-    await setDoc(doc(db, "gameState", "current"), { players: updated, currentGameweek }, { merge: true });
+    await deleteDoc(doc(db, "players", String(id)));
     // Also remove from any saved teams
     const batch = writeBatch(db);
     for (const team of teams) {
@@ -639,8 +691,25 @@ export default function Page() {
     const gw = currentGameweek;
     const updatedPlayers = players.map((p) => ({
       ...p,
-      history: [...(p.history ?? []), { week: gw, runs: p.runs, wickets: p.wickets, catches: p.catches, points: calculatePoints(p) }],
-      runs: 0, wickets: 0, catches: 0,
+      history: [
+        ...(p.history ?? []),
+        {
+          week: gw,
+          runs: p.runs,
+          wickets: p.wickets,
+          catches: p.catches,
+          wkCatches: p.wkCatches,
+          stumpings: p.stumpings,
+          runOuts: p.runOuts,
+          points: calculatePoints(p),
+        },
+      ],
+      runs: 0,
+      wickets: 0,
+      catches: 0,
+      wkCatches: 0,
+      stumpings: 0,
+      runOuts: 0,
     }));
 
     const batch = writeBatch(db);
@@ -650,7 +719,18 @@ export default function Page() {
         cumulativePoints: Math.round(((team.cumulativePoints ?? 0) + weekPts) * 10) / 10,
       });
     }
-    batch.set(doc(db, "gameState", "current"), { players: updatedPlayers, currentGameweek: gw + 1 });
+    for (const p of updatedPlayers) {
+      batch.update(doc(db, "players", String(p.id)), {
+        runs: p.runs,
+        wickets: p.wickets,
+        catches: p.catches,
+        wkCatches: p.wkCatches,
+        stumpings: p.stumpings,
+        runOuts: p.runOuts,
+        history: p.history,
+      });
+    }
+    batch.set(doc(db, "gameState", "current"), { currentGameweek: gw + 1 }, { merge: true });
     await batch.commit();
     clearBuilder();
     setTab("draft");
@@ -660,7 +740,25 @@ export default function Page() {
     if (!window.confirm("Full reset: deletes ALL teams and player history. Are you sure?")) return;
     const batch = writeBatch(db);
     for (const team of teams) batch.delete(doc(db, "teams", team.uid));
-    batch.set(doc(db, "gameState", "current"), { players: SEEDED_PLAYERS, currentGameweek: 1 });
+    for (const p of SEEDED_PLAYERS) {
+      batch.set(
+        doc(db, "players", String(p.id)),
+        {
+          name: p.name,
+          price: p.price,
+          runs: 0,
+          wickets: 0,
+          catches: 0,
+          wkCatches: 0,
+          stumpings: 0,
+          runOuts: 0,
+          available: p.available,
+          history: [],
+        },
+        { merge: true },
+      );
+    }
+    batch.set(doc(db, "gameState", "current"), { currentGameweek: 1 }, { merge: true });
     await batch.commit();
     clearBuilder();
     setTab("draft");

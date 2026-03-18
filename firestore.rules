@@ -1,4 +1,34 @@
 rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isAdmin() { return signedIn() && request.auth.token.admin == true; }
+
+    // Players: everyone signed in can read, only admins can write.
+    match /players/{playerId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Teams: everyone signed in can read. Signed-in users can create teams.
+    // Only the creator can update/delete their own team.
+    match /teams/{teamId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update, delete: if signedIn()
+        && resource.data.createdBy == request.auth.uid;
+    }
+
+    // Game state: readable by signed-in users; writable by admins.
+    match /gameState/{docId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
+  }
+}
+
+rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {

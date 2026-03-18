@@ -17,6 +17,7 @@ import {
   Trash2,
   Trophy,
   Users,
+  X,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
@@ -26,7 +27,11 @@ import {
   collection,
   doc,
   deleteDoc,
+  getDoc,
+  limit,
   onSnapshot,
+  orderBy,
+  query,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -64,6 +69,7 @@ type Player = {
 type SavedTeam = {
   uid: string;
   name: string;
+  ownerName?: string;
   players: number[];
   captain: number | null;
   viceCaptain: number | null;
@@ -71,6 +77,14 @@ type SavedTeam = {
   cumulativePoints?: number;
   createdBy?: string;
   createdAt?: unknown;
+};
+
+type SnapshotDoc = {
+  id: string;
+  gameweek: number;
+  createdAt?: unknown;
+  createdBy?: string;
+  label?: string;
 };
 
 type BuilderState = {
@@ -353,6 +367,8 @@ export default function Page() {
   const [unsavedStats, setUnsavedStats] = useState(false);
   const [savingStats, setSavingStats] = useState(false);
   const [savedStatsFlash, setSavedStatsFlash] = useState(false);
+  const [snapshots, setSnapshots] = useState<SnapshotDoc[]>([]);
+  const [restoringSnapshotId, setRestoringSnapshotId] = useState<string | null>(null);
 
   // Admin — add player form
   const [newName, setNewName] = useState("");
@@ -360,6 +376,9 @@ export default function Page() {
 
   // Save team state
   const [savingTeam, setSavingTeam] = useState(false);
+
+  // Leaderboard: view another team's XI
+  const [teamModal, setTeamModal] = useState<SavedTeam | null>(null);
 
   // Firestore: listen to current gameweek
   useEffect(() => {
@@ -473,6 +492,23 @@ export default function Page() {
     if (!unsavedStats) setLocalPlayers(players);
   }, [players, unsavedStats]);
 
+  // Admin: listen to snapshots (admin-only)
+  useEffect(() => {
+    if (!adminAuthed) return;
+    const q = query(collection(db, "snapshots"), orderBy("createdAt", "desc"), limit(12));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        setSnapshots(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) } as SnapshotDoc)));
+      },
+      (err) => {
+        // Most common cause: token lacks admin claim; sign out/in to refresh.
+        setActionError(err?.message ?? "Failed to read snapshots.");
+      },
+    );
+    return () => unsub();
+  }, [adminAuthed]);
+
   async function logout() {
     await signOut(auth);
     router.replace("/login");
@@ -583,8 +619,9 @@ export default function Page() {
     setSavingTeam(true);
     try {
       await runAction("Save team", async () =>
-        addDoc(collection(db, "teams"), {
+        setDoc(doc(db, "teams", authUser.uid), {
           name: builder.teamName.trim(),
+          ownerName: authUser.displayName ?? authUser.email ?? "Nondies Player",
           players: [...builder.selected],
           captain: builder.captain,
           viceCaptain: builder.viceCaptain,
@@ -592,7 +629,7 @@ export default function Page() {
           createdBy: authUser.uid,
           createdAt: serverTimestamp(),
           cumulativePoints: 0,
-        }),
+        }, { merge: true }),
       );
       setBuilder((prev) => ({ ...prev, teamName: "" }));
       setTab("leaderboard");
@@ -621,6 +658,27 @@ export default function Page() {
     setSavingStats(true);
     try {
       await runAction("Save stats", async () => {
+        // Snapshot current Firestore state first so we can rewind if needed
+        await addDoc(collection(db, "snapshots"), {
+          gameweek: currentGameweek,
+          createdAt: serverTimestamp(),
+          createdBy: authUser?.uid ?? null,
+          label: "auto-before-save",
+          players: players.map((p) => ({
+            id: p.id,
+            name: p.name,
+            price: p.price,
+            runs: p.runs,
+            wickets: p.wickets,
+            catches: p.catches,
+            wkCatches: p.wkCatches,
+            stumpings: p.stumpings,
+            runOuts: p.runOuts,
+            available: p.available,
+            history: p.history ?? [],
+          })),
+        });
+
         const batch = writeBatch(db);
         for (const p of localPlayers) {
           batch.set(
@@ -658,6 +716,43 @@ export default function Page() {
       for (const p of updated) batch.update(doc(db, "players", String(p.id)), { available: p.available });
       await batch.commit();
     });
+  }
+
+  async function restoreSnapshot(snapshotId: string) {
+    setRestoringSnapshotId(snapshotId);
+    try {
+      await runAction("Restore snapshot", async () => {
+        const snapRef = doc(db, "snapshots", snapshotId);
+        const snap = await getDoc(snapRef);
+        if (!snap.exists()) throw new Error("Snapshot not found.");
+        const data: any = snap.data();
+        const list: any[] = Array.isArray(data.players) ? data.players : [];
+        const batch = writeBatch(db);
+        for (const raw of list) {
+          const id = Number(raw?.id);
+          if (!Number.isFinite(id)) continue;
+          batch.set(
+            doc(db, "players", String(id)),
+            {
+              name: String(raw?.name ?? ""),
+              price: clampNonNegativeInt(Number(raw?.price ?? 0)),
+              runs: clampNonNegativeInt(Number(raw?.runs ?? 0)),
+              wickets: clampNonNegativeInt(Number(raw?.wickets ?? 0)),
+              catches: clampNonNegativeInt(Number(raw?.catches ?? 0)),
+              wkCatches: clampNonNegativeInt(Number(raw?.wkCatches ?? 0)),
+              stumpings: clampNonNegativeInt(Number(raw?.stumpings ?? 0)),
+              runOuts: clampNonNegativeInt(Number(raw?.runOuts ?? 0)),
+              available: Boolean(raw?.available),
+              history: Array.isArray(raw?.history) ? raw.history : [],
+            },
+            { merge: true },
+          );
+        }
+        await batch.commit();
+      });
+    } finally {
+      setRestoringSnapshotId(null);
+    }
   }
 
   async function addPlayer() {
@@ -1103,6 +1198,12 @@ export default function Page() {
                                 <div className="truncate text-lg font-bold">{row.team.name}</div>
                                 {row.team.uid === authUser.uid && <Pill tone="blue">You</Pill>}
                               </div>
+                              <div className="mt-1 text-xs text-zinc-400">
+                                Owner{" "}
+                                <span className="font-semibold text-zinc-200">
+                                  {row.team.ownerName ?? "Unknown"}
+                                </span>
+                              </div>
                               <div className="mt-2 flex flex-wrap gap-2 text-xs">
                                 <Pill><span className="text-zinc-400">Captain</span>{" "}<span className="font-semibold">{row.capName}</span></Pill>
                                 <Pill><span className="text-zinc-400">VC</span>{" "}<span className="font-semibold">{row.vcName}</span></Pill>
@@ -1117,6 +1218,13 @@ export default function Page() {
                                 <div className="text-xs font-medium text-zinc-400">Total</div>
                                 <div className="text-3xl font-black tracking-tight text-white">{row.total}</div>
                               </div>
+                              <button
+                                type="button"
+                                onClick={() => setTeamModal(row.team)}
+                                className="rounded-xl bg-white/5 px-3 py-2 text-xs font-semibold text-zinc-200 ring-1 ring-white/10 hover:bg-white/10"
+                              >
+                                View XI
+                              </button>
                             </div>
                           </div>
                         </div>
@@ -1242,6 +1350,53 @@ export default function Page() {
                           className="rounded-2xl bg-zinc-800 px-4 py-3 text-sm font-bold text-zinc-300 ring-1 ring-white/10 hover:bg-zinc-700 sm:col-span-2 lg:col-span-2">
                           Full reset (new season — clears all teams &amp; history)
                         </button>
+                      </div>
+
+                      {/* Rewind / restore */}
+                      <div className="rounded-2xl bg-white/5 ring-1 ring-white/10">
+                        <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5">
+                          <div>
+                            <div className="text-base font-semibold">Rewind player stats</div>
+                            <div className="mt-0.5 text-xs text-zinc-500">
+                              Every time you hit <span className="text-zinc-200 font-semibold">Save stats</span> a snapshot is saved first. Restore one to undo mistakes.
+                            </div>
+                          </div>
+                          <div className="text-xs text-zinc-500">
+                            Need access? Make sure your Firebase account has the <span className="text-zinc-200 font-semibold">admin</span> claim and sign out/in.
+                          </div>
+                        </div>
+                        <div className="border-t border-white/10 p-4 sm:p-5">
+                          {snapshots.length === 0 ? (
+                            <div className="text-sm text-zinc-400">No snapshots yet.</div>
+                          ) : (
+                            <div className="grid gap-2">
+                              {snapshots.map((s) => (
+                                <div key={s.id} className="flex flex-col gap-2 rounded-2xl bg-black/20 p-4 ring-1 ring-white/10 sm:flex-row sm:items-center sm:justify-between">
+                                  <div className="min-w-0">
+                                    <div className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+                                      <Pill tone="neutral">GW{s.gameweek}</Pill>
+                                      <span className="truncate text-zinc-100">{s.label ?? "snapshot"}</span>
+                                    </div>
+                                    <div className="mt-1 text-xs text-zinc-500">
+                                      Snapshot id <span className="font-mono text-zinc-400">{s.id}</span>
+                                    </div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => void restoreSnapshot(s.id)}
+                                    disabled={!!restoringSnapshotId}
+                                    className={["rounded-xl px-4 py-2 text-xs font-bold ring-1 transition",
+                                      restoringSnapshotId
+                                        ? "bg-white/5 text-zinc-400 ring-white/10"
+                                        : "bg-white/5 text-zinc-200 ring-white/10 hover:bg-white/10"].join(" ")}
+                                  >
+                                    {restoringSnapshotId === s.id ? "Restoring…" : "Restore"}
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       {/* Best XI */}
@@ -1414,6 +1569,64 @@ export default function Page() {
 
         </main>
       </div>
+
+      {teamModal ? (
+        <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/70 p-3 backdrop-blur-sm sm:items-center">
+          <div className="w-full max-w-xl overflow-hidden rounded-3xl bg-zinc-950 ring-1 ring-white/10">
+            <div className="flex items-start justify-between gap-3 border-b border-white/10 px-5 py-4">
+              <div className="min-w-0">
+                <div className="truncate text-lg font-bold">{teamModal.name}</div>
+                <div className="mt-0.5 text-xs text-zinc-400">
+                  Owner{" "}
+                  <span className="font-semibold text-zinc-200">
+                    {teamModal.ownerName ?? "Unknown"}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTeamModal(null)}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-white/5 text-zinc-300 ring-1 ring-white/10 hover:bg-white/10 hover:text-white"
+                aria-label="Close"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="px-5 py-4">
+              <div className="grid gap-2">
+                {(teamModal.players ?? []).map((pid) => {
+                  const p = playersById.get(pid);
+                  if (!p) return null;
+                  const isC = teamModal.captain === pid;
+                  const isVC = teamModal.viceCaptain === pid;
+                  const isWK = teamModal.keeper === pid;
+                  return (
+                    <div key={pid} className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3 ring-1 ring-white/10">
+                      <div className="min-w-0">
+                        <div className="truncate font-semibold text-white">{p.name}</div>
+                        <div className="mt-1 flex flex-wrap gap-2 text-xs">
+                          <Pill>{money(p.price)}</Pill>
+                          {isC ? <Pill tone="red">C</Pill> : null}
+                          {isVC ? <Pill tone="amber">VC</Pill> : null}
+                          {isWK ? <Pill tone="blue">WK</Pill> : null}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-xs font-medium text-zinc-400">Raw</div>
+                        <div className="text-base font-black text-white">{calculatePoints(p)}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="mt-4 text-xs text-zinc-500">
+                Points shown here are <span className="text-zinc-300">raw player points</span> (no captain/VC multipliers).
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-white/8 bg-zinc-950/80 backdrop-blur-md sm:hidden">
         <div className="mx-auto flex max-w-6xl gap-2 px-3 py-3">

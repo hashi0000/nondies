@@ -239,7 +239,6 @@ function validateTeam(args: {
 
 function FormDots({ history }: { history: WeekRecord[] }) {
   const recent = history.slice(-5);
-  if (recent.length === 0) return null;
   return (
     <div className="flex items-center gap-1.5">
       <span className="text-xs text-zinc-500">Form</span>
@@ -333,6 +332,8 @@ export default function Page() {
   const [teams, setTeams] = useState<SavedTeam[]>([]);
   const [currentGameweek, setCurrentGameweek] = useState(1);
   const [fsReady, setFsReady] = useState(false);
+  const [fsError, setFsError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Auth
   const [authUser, setAuthUser] = useState<User | null>(null);
@@ -372,7 +373,10 @@ export default function Page() {
         void setDoc(gsRef, { currentGameweek: 1 });
       }
       setFsReady(true);
-    }, () => setFsReady(true));
+    }, (err) => {
+      setFsError(err?.message ?? "Failed to read game state.");
+      setFsReady(true);
+    });
     return () => unsub();
   }, []);
 
@@ -421,17 +425,38 @@ export default function Page() {
       list.sort((a, b) => a.id - b.id);
       setPlayers(list);
       setFsReady(true);
-    }, () => setFsReady(true));
+      setFsError(null);
+    }, (err) => {
+      setFsError(err?.message ?? "Failed to read players.");
+      setFsReady(true);
+    });
     return () => unsub();
   }, []);
 
   // Firestore: listen to teams collection
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, "teams"), (snap) => {
-      setTeams(snap.docs.map((d) => ({ uid: d.id, ...d.data() } as SavedTeam)));
-    });
+    const unsub = onSnapshot(
+      collection(db, "teams"),
+      (snap) => {
+        setTeams(snap.docs.map((d) => ({ uid: d.id, ...d.data() } as SavedTeam)));
+      },
+      (err) => {
+        setFsError(err?.message ?? "Failed to read teams.");
+      },
+    );
     return () => unsub();
   }, []);
+
+  async function runAction<T>(label: string, fn: () => Promise<T>) {
+    setActionError(null);
+    try {
+      return await fn();
+    } catch (e: any) {
+      const msg = e?.message ? String(e.message) : "Unknown error";
+      setActionError(`${label} failed: ${msg}`);
+      throw e;
+    }
+  }
 
   // Firebase auth
   useEffect(() => {
@@ -557,16 +582,18 @@ export default function Page() {
     if (locked || !validation.ok || !authUser) return;
     setSavingTeam(true);
     try {
-      await addDoc(collection(db, "teams"), {
-        name: builder.teamName.trim(),
-        players: [...builder.selected],
-        captain: builder.captain,
-        viceCaptain: builder.viceCaptain,
-        keeper: builder.keeper,
-        createdBy: authUser.uid,
-        createdAt: serverTimestamp(),
-        cumulativePoints: 0,
-      });
+      await runAction("Save team", async () =>
+        addDoc(collection(db, "teams"), {
+          name: builder.teamName.trim(),
+          players: [...builder.selected],
+          captain: builder.captain,
+          viceCaptain: builder.viceCaptain,
+          keeper: builder.keeper,
+          createdBy: authUser.uid,
+          createdAt: serverTimestamp(),
+          cumulativePoints: 0,
+        }),
+      );
       setBuilder((prev) => ({ ...prev, teamName: "" }));
       setTab("leaderboard");
     } finally {
@@ -593,25 +620,27 @@ export default function Page() {
   async function saveStats() {
     setSavingStats(true);
     try {
-      const batch = writeBatch(db);
-      for (const p of localPlayers) {
-        batch.set(
-          doc(db, "players", String(p.id)),
-          {
-            name: p.name,
-            price: p.price,
-            runs: p.runs,
-            wickets: p.wickets,
-            catches: p.catches,
-            wkCatches: p.wkCatches,
-            stumpings: p.stumpings,
-            runOuts: p.runOuts,
-            available: p.available,
-          },
-          { merge: true },
-        );
-      }
-      await batch.commit();
+      await runAction("Save stats", async () => {
+        const batch = writeBatch(db);
+        for (const p of localPlayers) {
+          batch.set(
+            doc(db, "players", String(p.id)),
+            {
+              name: p.name,
+              price: p.price,
+              runs: p.runs,
+              wickets: p.wickets,
+              catches: p.catches,
+              wkCatches: p.wkCatches,
+              stumpings: p.stumpings,
+              runOuts: p.runOuts,
+              available: p.available,
+            },
+            { merge: true },
+          );
+        }
+        await batch.commit();
+      });
       setUnsavedStats(false);
       setSavedStatsFlash(true);
       setTimeout(() => setSavedStatsFlash(false), 2000);
@@ -624,11 +653,11 @@ export default function Page() {
     const updated = localPlayers.map((p) => ({ ...p, available: val }));
     setLocalPlayers(updated);
     setUnsavedStats(false);
-    const batch = writeBatch(db);
-    for (const p of updated) {
-      batch.update(doc(db, "players", String(p.id)), { available: p.available });
-    }
-    await batch.commit();
+    await runAction("Bulk availability", async () => {
+      const batch = writeBatch(db);
+      for (const p of updated) batch.update(doc(db, "players", String(p.id)), { available: p.available });
+      await batch.commit();
+    });
   }
 
   async function addPlayer() {
@@ -653,17 +682,19 @@ export default function Page() {
     setNewName("");
     setNewPrice(5);
     setUnsavedStats(false);
-    await setDoc(doc(db, "players", String(newPlayer.id)), {
-      name: newPlayer.name,
-      price: newPlayer.price,
-      runs: 0,
-      wickets: 0,
-      catches: 0,
-      wkCatches: 0,
-      stumpings: 0,
-      runOuts: 0,
-      available: true,
-    });
+    await runAction("Add player", async () =>
+      setDoc(doc(db, "players", String(newPlayer.id)), {
+        name: newPlayer.name,
+        price: newPlayer.price,
+        runs: 0,
+        wickets: 0,
+        catches: 0,
+        wkCatches: 0,
+        stumpings: 0,
+        runOuts: 0,
+        available: true,
+      }),
+    );
   }
 
   async function deletePlayer(id: number) {
@@ -671,20 +702,22 @@ export default function Page() {
     const updated = localPlayers.filter((p) => p.id !== id);
     setLocalPlayers(updated);
     setUnsavedStats(false);
-    await deleteDoc(doc(db, "players", String(id)));
+    await runAction("Delete player", async () => deleteDoc(doc(db, "players", String(id))));
     // Also remove from any saved teams
-    const batch = writeBatch(db);
-    for (const team of teams) {
-      if (team.players.includes(id)) {
-        batch.update(doc(db, "teams", team.uid), {
-          players: team.players.filter((pid) => pid !== id),
-          captain: team.captain === id ? null : team.captain,
-          viceCaptain: team.viceCaptain === id ? null : team.viceCaptain,
-          keeper: team.keeper === id ? null : team.keeper,
-        });
+    await runAction("Update affected teams", async () => {
+      const batch = writeBatch(db);
+      for (const team of teams) {
+        if (team.players.includes(id)) {
+          batch.update(doc(db, "teams", team.uid), {
+            players: team.players.filter((pid) => pid !== id),
+            captain: team.captain === id ? null : team.captain,
+            viceCaptain: team.viceCaptain === id ? null : team.viceCaptain,
+            keeper: team.keeper === id ? null : team.keeper,
+          });
+        }
       }
-    }
-    await batch.commit();
+      await batch.commit();
+    });
   }
 
   async function endGameweek() {
@@ -803,6 +836,8 @@ export default function Page() {
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-zinc-300">
               <Pill>Signed in as {authUser.displayName || authUser.email || "Player"}</Pill>
+              {fsError ? <Pill tone="amber">Sync issue: {fsError}</Pill> : null}
+              {actionError ? <Pill tone="amber">{actionError}</Pill> : null}
               <Pill tone="red"><Users className="h-3.5 w-3.5" />{selectedCount}/{SQUAD_SIZE}</Pill>
               <Pill tone={spend > BUDGET ? "red" : "neutral"}>
                 <span className="font-medium">{money(spend)}</span>

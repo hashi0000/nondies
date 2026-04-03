@@ -16,6 +16,7 @@ import {
   Star,
   Trash2,
   Trophy,
+  Download,
   Users,
   X,
 } from "lucide-react";
@@ -38,6 +39,8 @@ import {
   writeBatch,
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
+import { calculatePoints, clampNonNegativeInt } from "@/lib/fantasyPoints";
+import { normalizePlayCricketName } from "@/lib/playCricket/names";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -144,11 +147,6 @@ const SEEDED_PLAYERS: Player[] = [
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function clampNonNegativeInt(n: number) {
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.floor(n));
-}
-
 function money(n: number) { return `£${n}`; }
 
 function formatLockTime(d: Date) {
@@ -170,31 +168,6 @@ function getThisWeeksLockDate(now = new Date()) {
 
 function isSelectionLocked(now = new Date()) {
   return now.getTime() >= getThisWeeksLockDate(now).getTime();
-}
-
-function calculatePoints(p: Player) {
-  const runs = clampNonNegativeInt(p.runs);
-  let runBonus = 0;
-  if (p.runs >= 100) runBonus = 25;
-  else if (p.runs >= 75) runBonus = 15;
-  else if (p.runs >= 50) runBonus = 10;
-  else if (p.runs >= 25) runBonus = 5;
-
-  const wickets = clampNonNegativeInt(p.wickets);
-  const totalCatches = clampNonNegativeInt(p.catches);
-  const wkC = clampNonNegativeInt(p.wkCatches);
-  const stumpings = clampNonNegativeInt(p.stumpings);
-  const runOuts = clampNonNegativeInt(p.runOuts);
-  const outfieldCatches = Math.max(totalCatches - wkC, 0);
-
-  const batting = runs + runBonus;
-  const bowling = wickets * 16;
-  const fielding = outfieldCatches * 8;
-
-  // Wicketkeeper dismissals earn extra on top of normal catch points.
-  const keeperBonuses = wkC * 10 + stumpings * 12 + runOuts * 10;
-
-  return batting + bowling + fielding + keeperBonuses;
 }
 
 function computeWeekPoints(team: SavedTeam, byId: Map<number, Player>) {
@@ -335,6 +308,46 @@ function NumberInput({ value, onChange, min = 0, step = 1 }: { value: number; on
   );
 }
 
+/** The account holder’s name from Firebase Auth (Google name, signup “Your name”, or email). */
+function accountHolderName(user: User): string {
+  const dn = user.displayName?.trim();
+  if (dn) return dn;
+  const em = user.email?.trim();
+  if (em) return em;
+  return "Nondies Player";
+}
+
+function ownerFieldFromFirestore(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value === "string") {
+    const t = value.trim();
+    return t.length ? t : undefined;
+  }
+  const s = String(value).trim();
+  return s.length ? s : undefined;
+}
+
+/**
+ * Map a teams/{id} snapshot. Spread doc data first, then set `uid` from the document id so a
+ * stray `uid` field in the document cannot overwrite the real owner id (that broke owner matching).
+ */
+function savedTeamFromFirestoreDoc(d: { id: string; data: () => Record<string, unknown> }): SavedTeam {
+  const raw = d.data();
+  const ownerName =
+    ownerFieldFromFirestore(raw.ownerName) ?? ownerFieldFromFirestore(raw.owner_name);
+  return { ...raw, uid: d.id, ownerName } as SavedTeam;
+}
+
+/** Leaderboard owner: always the account holder — live from Auth for your row; Firestore for everyone else. */
+function resolveOwnerDisplayName(team: SavedTeam, authUser: User | null): string {
+  if (authUser && team.uid === authUser.uid) {
+    return accountHolderName(authUser);
+  }
+  const stored = ownerFieldFromFirestore(team.ownerName);
+  if (stored) return stored;
+  return "Unknown";
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Page() {
@@ -369,6 +382,9 @@ export default function Page() {
   const [savedStatsFlash, setSavedStatsFlash] = useState(false);
   const [snapshots, setSnapshots] = useState<SnapshotDoc[]>([]);
   const [restoringSnapshotId, setRestoringSnapshotId] = useState<string | null>(null);
+  const [pcMatchId, setPcMatchId] = useState("");
+  const [pcBusy, setPcBusy] = useState(false);
+  const [pcNote, setPcNote] = useState<string | null>(null);
 
   // Admin — add player form
   const [newName, setNewName] = useState("");
@@ -379,6 +395,20 @@ export default function Page() {
 
   // Leaderboard: view another team's XI
   const [teamModal, setTeamModal] = useState<SavedTeam | null>(null);
+
+  useEffect(() => {
+    if (!teamModal) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setTeamModal(null);
+    };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [teamModal]);
 
   // Firestore: listen to current gameweek
   useEffect(() => {
@@ -457,7 +487,7 @@ export default function Page() {
     const unsub = onSnapshot(
       collection(db, "teams"),
       (snap) => {
-        setTeams(snap.docs.map((d) => ({ uid: d.id, ...d.data() } as SavedTeam)));
+        setTeams(snap.docs.map((d) => savedTeamFromFirestoreDoc(d)));
       },
       (err) => {
         setFsError(err?.message ?? "Failed to read teams.");
@@ -486,6 +516,32 @@ export default function Page() {
     });
     return () => unsub();
   }, [router]);
+
+  // Sync ownerName + createdBy from Auth using getDoc (does not rely on teams[] mapping).
+  useEffect(() => {
+    if (!authUser) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const ref = doc(db, "teams", authUser.uid);
+        const snap = await getDoc(ref);
+        if (cancelled || !snap.exists()) return;
+        const data = snap.data();
+        const desired = accountHolderName(authUser);
+        const cur = ownerFieldFromFirestore(data.ownerName);
+        const okOwner = cur === desired;
+        const okBy = data.createdBy === authUser.uid;
+        if (okOwner && okBy) return;
+        await setDoc(ref, { ownerName: desired, createdBy: authUser.uid }, { merge: true });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!cancelled) setActionError(`Could not update owner name: ${msg}`);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authUser]);
 
   // Keep admin edit buffer in sync with Firestore unless they have unsaved edits
   useEffect(() => {
@@ -621,7 +677,7 @@ export default function Page() {
       await runAction("Save team", async () =>
         setDoc(doc(db, "teams", authUser.uid), {
           name: builder.teamName.trim(),
-          ownerName: authUser.displayName ?? authUser.email ?? "Nondies Player",
+          ownerName: accountHolderName(authUser),
           players: [...builder.selected],
           captain: builder.captain,
           viceCaptain: builder.viceCaptain,
@@ -652,6 +708,63 @@ export default function Page() {
   function editLocalPlayer(id: number, patch: Partial<Player>) {
     setLocalPlayers((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
     setUnsavedStats(true);
+  }
+
+  async function importFromPlayCricket() {
+    const id = pcMatchId.trim();
+    if (!id || !/^\d+$/.test(id)) {
+      setPcNote("Enter the numeric match ID from the Play Cricket scorecard URL.");
+      return;
+    }
+    setPcBusy(true);
+    setPcNote(null);
+    try {
+      const res = await fetch(`/api/play-cricket/match?matchId=${encodeURIComponent(id)}`);
+      const data = (await res.json()) as {
+        error?: string;
+        matchTitle?: string;
+        players?: Record<
+          string,
+          {
+            runs: number;
+            wickets: number;
+            catches: number;
+            wkCatches: number;
+            stumpings: number;
+            runOuts: number;
+          }
+        >;
+      };
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      const pool = data.players ?? {};
+      let updatedCount = 0;
+      setLocalPlayers((prev) =>
+        prev.map((p) => {
+          const key = normalizePlayCricketName(p.name);
+          const stats = pool[key];
+          if (!stats) return p;
+          updatedCount += 1;
+          return {
+            ...p,
+            runs: stats.runs,
+            wickets: stats.wickets,
+            catches: stats.catches,
+            wkCatches: stats.wkCatches,
+            stumpings: stats.stumpings,
+            runOuts: stats.runOuts,
+          };
+        }),
+      );
+      setUnsavedStats(true);
+      setPcNote(
+        `Imported ${updatedCount} player row(s) from “${data.matchTitle ?? id}”. ` +
+          "Review WK catches and run-outs if needed, then Save stats.",
+      );
+    } catch (e: unknown) {
+      setPcNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPcBusy(false);
+    }
   }
 
   async function saveStats() {
@@ -930,7 +1043,7 @@ export default function Page() {
               </div>
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-zinc-300">
-              <Pill>Signed in as {authUser.displayName || authUser.email || "Player"}</Pill>
+              <Pill>Signed in as {accountHolderName(authUser)}</Pill>
               {fsError ? <Pill tone="amber">Sync issue: {fsError}</Pill> : null}
               {actionError ? <Pill tone="amber">{actionError}</Pill> : null}
               <Pill tone="red"><Users className="h-3.5 w-3.5" />{selectedCount}/{SQUAD_SIZE}</Pill>
@@ -1201,7 +1314,7 @@ export default function Page() {
                               <div className="mt-1 text-xs text-zinc-400">
                                 Owner{" "}
                                 <span className="font-semibold text-zinc-200">
-                                  {row.team.ownerName ?? "Unknown"}
+                                  {resolveOwnerDisplayName(row.team, authUser)}
                                 </span>
                               </div>
                               <div className="mt-2 flex flex-wrap gap-2 text-xs">
@@ -1241,7 +1354,7 @@ export default function Page() {
               <Card>
                 <CardHeader
                   title="Player points"
-                  subtitle="Raw fantasy points for every available player (before captain/VC multipliers)."
+                  subtitle="Base fantasy points for each player (before captain or vice-captain multipliers)."
                 />
                 <CardBody>
                   <div className="mb-4 text-xs text-zinc-400">
@@ -1350,6 +1463,49 @@ export default function Page() {
                           className="rounded-2xl bg-zinc-800 px-4 py-3 text-sm font-bold text-zinc-300 ring-1 ring-white/10 hover:bg-zinc-700 sm:col-span-2 lg:col-span-2">
                           Full reset (new season — clears all teams &amp; history)
                         </button>
+                      </div>
+
+                      {/* Play Cricket import */}
+                      <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4 sm:p-5">
+                        <div className="text-base font-semibold text-white">Import from Play Cricket</div>
+                        <p className="mt-1 text-xs text-zinc-500 leading-relaxed">
+                          Request an API token from the ECB (club Play Cricket admin), then set{" "}
+                          <span className="font-mono text-zinc-400">PLAY_CRICKET_API_TOKEN</span> in{" "}
+                          <span className="font-mono text-zinc-400">.env.local</span> on the server and restart{" "}
+                          <span className="font-mono text-zinc-400">npm run dev</span>. Paste a match ID from the scorecard URL,
+                          fetch stats, review the table, and Save stats.
+                        </p>
+                        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+                          <label className="block flex-1 min-w-[200px]">
+                            <div className="mb-1.5 text-xs font-medium text-zinc-300">Play Cricket match ID</div>
+                            <input
+                              value={pcMatchId}
+                              onChange={(e) => setPcMatchId(e.target.value)}
+                              inputMode="numeric"
+                              placeholder="e.g. 12345678"
+                              className="w-full rounded-xl bg-white/5 px-3 py-2.5 text-sm text-white placeholder:text-zinc-600 ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-red-500/60"
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            disabled={pcBusy}
+                            onClick={() => void importFromPlayCricket()}
+                            className={[
+                              "inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold ring-1 transition",
+                              pcBusy
+                                ? "bg-white/5 text-zinc-500 ring-white/10 cursor-wait"
+                                : "bg-sky-600 text-white ring-sky-500/40 hover:bg-sky-500",
+                            ].join(" ")}
+                          >
+                            <Download className="h-4 w-4 shrink-0" />
+                            {pcBusy ? "Fetching…" : "Fetch & apply to table"}
+                          </button>
+                        </div>
+                        {pcNote ? (
+                          <div className="mt-3 rounded-xl bg-white/5 px-3 py-2 text-xs text-zinc-300 ring-1 ring-white/10">
+                            {pcNote}
+                          </div>
+                        ) : null}
                       </div>
 
                       {/* Rewind / restore */}
@@ -1571,29 +1727,39 @@ export default function Page() {
       </div>
 
       {teamModal ? (
-        <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/70 p-3 backdrop-blur-sm sm:items-center">
-          <div className="w-full max-w-xl overflow-hidden rounded-3xl bg-zinc-950 ring-1 ring-white/10">
-            <div className="flex items-start justify-between gap-3 border-b border-white/10 px-5 py-4">
+        <div
+          role="presentation"
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur-sm"
+          onClick={() => setTeamModal(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="team-modal-title"
+            className="flex max-h-[min(88dvh,100%)] w-full max-w-xl flex-col overflow-hidden rounded-3xl bg-zinc-950 ring-1 ring-white/10"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/10 px-5 py-4">
               <div className="min-w-0">
-                <div className="truncate text-lg font-bold">{teamModal.name}</div>
+                <div id="team-modal-title" className="truncate text-lg font-bold">{teamModal.name}</div>
                 <div className="mt-0.5 text-xs text-zinc-400">
                   Owner{" "}
                   <span className="font-semibold text-zinc-200">
-                    {teamModal.ownerName ?? "Unknown"}
+                    {resolveOwnerDisplayName(teamModal, authUser)}
                   </span>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setTeamModal(null)}
-                className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-white/5 text-zinc-300 ring-1 ring-white/10 hover:bg-white/10 hover:text-white"
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white/5 text-zinc-300 ring-1 ring-white/10 hover:bg-white/10 hover:text-white"
                 aria-label="Close"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
 
-            <div className="px-5 py-4">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
               <div className="grid gap-2">
                 {(teamModal.players ?? []).map((pid) => {
                   const p = playersById.get(pid);
@@ -1613,7 +1779,7 @@ export default function Page() {
                         </div>
                       </div>
                       <div className="text-right">
-                        <div className="text-xs font-medium text-zinc-400">Raw</div>
+                        <div className="text-xs font-medium text-zinc-400">Base pts</div>
                         <div className="text-base font-black text-white">{calculatePoints(p)}</div>
                       </div>
                     </div>
@@ -1621,8 +1787,18 @@ export default function Page() {
                 })}
               </div>
               <div className="mt-4 text-xs text-zinc-500">
-                Points shown here are <span className="text-zinc-300">raw player points</span> (no captain/VC multipliers).
+                <span className="text-zinc-300">Base points</span> only — captain (2×) and vice-captain (1.5×) boosts count on the leaderboard, not in this list.
               </div>
+            </div>
+
+            <div className="shrink-0 border-t border-white/10 px-5 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:hidden">
+              <button
+                type="button"
+                onClick={() => setTeamModal(null)}
+                className="w-full rounded-xl bg-white/10 py-3 text-sm font-semibold text-white ring-1 ring-white/15 hover:bg-white/15"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>

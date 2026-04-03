@@ -10,14 +10,13 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
-    // Teams: everyone signed in can read. Signed-in users can create teams.
-    // Only the creator can update/delete their own team.
+    // Teams: doc id is the manager’s Firebase uid. (Legacy docs may omit createdBy.)
     match /teams/{teamId} {
       allow read: if signedIn();
       allow create: if signedIn()
+        && teamId == request.auth.uid
         && request.resource.data.createdBy == request.auth.uid;
-      allow update, delete: if signedIn()
-        && resource.data.createdBy == request.auth.uid;
+      allow update, delete: if signedIn() && teamId == request.auth.uid;
     }
 
     // Game state: readable by signed-in users; writable by admins.

@@ -978,9 +978,24 @@ export default function Page() {
   }
 
   async function fullReset() {
-    if (!window.confirm("Full reset: deletes ALL teams and player history. Are you sure?")) return;
+    if (
+      !window.confirm(
+        "New season reset: deletes ALL saved teams, removes any extra players you added in Admin, clears every seeded player’s stats and match history, and sets the league to GW1. Cannot be undone. Continue?",
+      )
+    ) {
+      return;
+    }
     const batch = writeBatch(db);
+    const seededIds = new Set(SEEDED_PLAYERS.map((p) => p.id));
+
     for (const team of teams) batch.delete(doc(db, "teams", team.uid));
+
+    for (const p of localPlayers) {
+      if (!seededIds.has(p.id)) {
+        batch.delete(doc(db, "players", String(p.id)));
+      }
+    }
+
     for (const p of SEEDED_PLAYERS) {
       batch.set(
         doc(db, "players", String(p.id)),
@@ -999,8 +1014,10 @@ export default function Page() {
         { merge: true },
       );
     }
+
     batch.set(doc(db, "gameState", "current"), { currentGameweek: 1 }, { merge: true });
     await batch.commit();
+    setUnsavedStats(false);
     clearBuilder();
     setTab("draft");
   }
@@ -1461,7 +1478,7 @@ export default function Page() {
                         </button>
                         <button type="button" onClick={() => void fullReset()}
                           className="rounded-2xl bg-zinc-800 px-4 py-3 text-sm font-bold text-zinc-300 ring-1 ring-white/10 hover:bg-zinc-700 sm:col-span-2 lg:col-span-2">
-                          Full reset (new season — clears all teams &amp; history)
+                          New season reset (GW1 — delete all teams, clear stats, remove added players)
                         </button>
                       </div>
 

@@ -150,7 +150,11 @@ const SEEDED_PLAYERS: Player[] = [
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function money(n: number) { return `£${n}`; }
+function money(n: number) {
+  const v = Number(n);
+  const x = Number.isFinite(v) ? Math.trunc(v) : 0;
+  return `£${x}`;
+}
 
 function formatLockTime(d: Date) {
   try {
@@ -304,8 +308,9 @@ function TextField({ value, onChange, placeholder, label, type = "text", right }
 }
 
 function NumberInput({ value, onChange, min = 0, step = 1 }: { value: number; onChange: (v: number) => void; min?: number; step?: number }) {
+  const n = Number.isFinite(value) ? Math.trunc(Number(value)) : 0;
   return (
-    <input type="number" value={Number.isFinite(value) ? value : 0} min={min} step={step}
+    <input type="number" inputMode="numeric" value={n} min={min} step={step}
       onChange={(e) => onChange(clampNonNegativeInt(Number(e.target.value)))}
       className="w-full rounded-lg bg-white/5 px-2.5 py-2 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-red-500/60" />
   );

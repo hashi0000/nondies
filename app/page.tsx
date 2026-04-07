@@ -411,6 +411,8 @@ export default function Page() {
   const [adminAuthed, setAdminAuthed] = useState(false);
   const [pin, setPin] = useState("");
   const pinInputRef = useRef<HTMLInputElement | null>(null);
+  /** After saving to Firestore, skip one sync from `players` → `localPlayers` so we don't overwrite with stale snapshot data before onSnapshot updates. */
+  const skipPlayerSyncRef = useRef(false);
   const [showBestXI, setShowBestXI] = useState(false);
 
   // Admin — local edits (not yet saved to Firestore)
@@ -596,7 +598,12 @@ export default function Page() {
 
   // Keep admin edit buffer in sync with Firestore unless they have unsaved edits
   useEffect(() => {
-    if (!unsavedStats) setLocalPlayers(players);
+    if (unsavedStats) return;
+    if (skipPlayerSyncRef.current) {
+      skipPlayerSyncRef.current = false;
+      return;
+    }
+    setLocalPlayers(players);
   }, [players, unsavedStats]);
 
   // Admin: listen to snapshots (admin-only)
@@ -900,11 +907,13 @@ export default function Page() {
               stumpings: p.stumpings,
               runOuts: p.runOuts,
               available: p.available,
+              history: p.history ?? [],
             },
             { merge: true },
           );
         }
         await batch.commit();
+        skipPlayerSyncRef.current = true;
       });
       setUnsavedStats(false);
       setSavedStatsFlash(true);
@@ -917,6 +926,7 @@ export default function Page() {
   async function bulkAvailability(val: boolean) {
     const updated = localPlayers.map((p) => ({ ...p, available: val }));
     setLocalPlayers(updated);
+    skipPlayerSyncRef.current = true;
     setUnsavedStats(false);
     await runAction("Bulk availability", async () => {
       const batch = writeBatch(db);
@@ -983,7 +993,6 @@ export default function Page() {
     setLocalPlayers(updated);
     setNewName("");
     setNewPrice(5);
-    setUnsavedStats(false);
     await runAction("Add player", async () =>
       setDoc(doc(db, "players", String(newPlayer.id)), {
         name: newPlayer.name,
@@ -995,14 +1004,18 @@ export default function Page() {
         stumpings: 0,
         runOuts: 0,
         available: true,
+        history: [],
       }),
     );
+    skipPlayerSyncRef.current = true;
+    setUnsavedStats(false);
   }
 
   async function deletePlayer(id: number) {
     if (!window.confirm("Delete this player? This cannot be undone.")) return;
     const updated = localPlayers.filter((p) => p.id !== id);
     setLocalPlayers(updated);
+    skipPlayerSyncRef.current = true;
     setUnsavedStats(false);
     await runAction("Delete player", async () => deleteDoc(doc(db, "players", String(id))));
     // Also remove from any saved teams
@@ -1119,6 +1132,7 @@ export default function Page() {
     try {
       await runAction("New season reset", async () => {
         await batch.commit();
+        skipPlayerSyncRef.current = true;
       });
       setUnsavedStats(false);
       clearBuilder();

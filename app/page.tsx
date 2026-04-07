@@ -17,6 +17,7 @@ import {
   Trash2,
   Trophy,
   Download,
+  ArrowUpDown,
   Users,
   X,
 } from "lucide-react";
@@ -99,6 +100,8 @@ type BuilderState = {
 };
 
 type TabKey = "draft" | "leaderboard" | "players" | "admin";
+
+type AdminStatsSortKey = "name" | "available" | "price" | "runs" | "wickets" | "catches" | "points";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -348,6 +351,41 @@ function resolveOwnerDisplayName(team: SavedTeam, authUser: User | null): string
   return "Unknown";
 }
 
+function AdminStatsSortTh({
+  label,
+  colKey,
+  sort,
+  onSort,
+}: {
+  label: string;
+  colKey: AdminStatsSortKey;
+  sort: { key: AdminStatsSortKey; dir: "asc" | "desc" };
+  onSort: (k: AdminStatsSortKey) => void;
+}) {
+  const active = sort.key === colKey;
+  return (
+    <th className="px-4 py-3">
+      <button
+        type="button"
+        onClick={() => onSort(colKey)}
+        className="inline-flex max-w-full items-center gap-1.5 text-left text-xs font-semibold text-zinc-300 hover:text-white transition"
+        aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
+      >
+        <span className="truncate">{label}</span>
+        {active ? (
+          sort.dir === "asc" ? (
+            <ChevronUp className="h-3.5 w-3.5 shrink-0 text-red-400" aria-hidden />
+          ) : (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-red-400" aria-hidden />
+          )
+        ) : (
+          <ArrowUpDown className="h-3.5 w-3.5 shrink-0 text-zinc-600 opacity-60" aria-hidden />
+        )}
+      </button>
+    </th>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Page() {
@@ -385,6 +423,19 @@ export default function Page() {
   const [pcMatchId, setPcMatchId] = useState("");
   const [pcBusy, setPcBusy] = useState(false);
   const [pcNote, setPcNote] = useState<string | null>(null);
+  const [adminStatsSort, setAdminStatsSort] = useState<{ key: AdminStatsSortKey; dir: "asc" | "desc" }>({
+    key: "name",
+    dir: "asc",
+  });
+
+  const toggleAdminStatsSort = React.useCallback((key: AdminStatsSortKey) => {
+    setAdminStatsSort((prev) => {
+      if (prev.key === key) {
+        return { key, dir: prev.dir === "asc" ? "desc" : "asc" };
+      }
+      return { key, dir: key === "name" ? "asc" : "desc" };
+    });
+  }, []);
 
   // Admin — add player form
   const [newName, setNewName] = useState("");
@@ -589,6 +640,8 @@ export default function Page() {
 
   const [search, setSearch] = useState("");
   const [onlyAvailable, setOnlyAvailable] = useState(true);
+  /** Draft pool list order (availability: available rows still listed first). */
+  const [draftSort, setDraftSort] = useState<"price_desc" | "price_asc" | "name">("price_desc");
   const playerPoints = useMemo(
     () =>
       players
@@ -605,10 +658,51 @@ export default function Page() {
       .filter((p) => (q ? p.name.toLowerCase().includes(q) : true))
       .sort((a, b) => {
         if (a.available !== b.available) return a.available ? -1 : 1;
+        if (draftSort === "name") return a.name.localeCompare(b.name);
+        if (draftSort === "price_asc") {
+          if (a.price !== b.price) return a.price - b.price;
+          return a.name.localeCompare(b.name);
+        }
+        // price_desc (default)
         if (b.price !== a.price) return b.price - a.price;
         return a.name.localeCompare(b.name);
       });
-  }, [players, onlyAvailable, search]);
+  }, [players, onlyAvailable, search, draftSort]);
+
+  const adminSortedPlayers = useMemo(() => {
+    const { key, dir } = adminStatsSort;
+    const mult = dir === "asc" ? 1 : -1;
+    return localPlayers.slice().sort((a, b) => {
+      let cmp = 0;
+      switch (key) {
+        case "name":
+          cmp = a.name.localeCompare(b.name);
+          break;
+        case "available":
+          cmp = Number(a.available) - Number(b.available);
+          break;
+        case "price":
+          cmp = a.price - b.price;
+          break;
+        case "runs":
+          cmp = a.runs - b.runs;
+          break;
+        case "wickets":
+          cmp = a.wickets - b.wickets;
+          break;
+        case "catches":
+          cmp = a.catches - b.catches;
+          break;
+        case "points":
+          cmp = calculatePoints(a) - calculatePoints(b);
+          break;
+        default:
+          cmp = 0;
+      }
+      if (cmp !== 0) return mult * cmp;
+      return a.name.localeCompare(b.name);
+    });
+  }, [localPlayers, adminStatsSort]);
 
   const validation = useMemo(() => validateTeam({
     teamName: builder.teamName, selected: builder.selected,
@@ -1123,10 +1217,22 @@ export default function Page() {
                     }
                   />
                   <CardBody>
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                       <TextField value={search} onChange={setSearch} placeholder="Search players…"
                         right={<Search className="h-4 w-4 text-zinc-500" />} />
-                      <div className="rounded-xl bg-white/5 p-3 ring-1 ring-white/10">
+                      <label className="block">
+                        <div className="mb-1.5 text-xs font-medium text-zinc-300">Sort by</div>
+                        <select
+                          value={draftSort}
+                          onChange={(e) => setDraftSort(e.target.value as "price_desc" | "price_asc" | "name")}
+                          className="w-full rounded-xl bg-white/5 px-3 py-2.5 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-red-500/60"
+                        >
+                          <option value="price_desc">Price (high → low)</option>
+                          <option value="price_asc">Price (low → high)</option>
+                          <option value="name">Name (A–Z)</option>
+                        </select>
+                      </label>
+                      <div className="rounded-xl bg-white/5 p-3 ring-1 ring-white/10 sm:col-span-2 lg:col-span-1">
                         <div className="text-xs font-medium text-zinc-300">Budget</div>
                         <div className="mt-2 flex items-baseline justify-between gap-3">
                           <div className="text-sm text-zinc-200">
@@ -1703,19 +1809,19 @@ export default function Page() {
                           <table className="w-full min-w-[1050px] border-collapse">
                             <thead className="bg-black/40">
                               <tr className="text-left text-xs font-semibold text-zinc-300">
-                                <th className="px-4 py-3">Player</th>
-                                <th className="px-4 py-3">Avail</th>
-                                <th className="px-4 py-3">Price</th>
-                                <th className="px-4 py-3">Runs</th>
-                                <th className="px-4 py-3">Wkts</th>
-                                <th className="px-4 py-3">Catches</th>
-                                <th className="px-4 py-3">Pts</th>
-                                <th className="px-4 py-3">Form</th>
-                                <th className="px-4 py-3"></th>
+                                <AdminStatsSortTh label="Player" colKey="name" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
+                                <AdminStatsSortTh label="Avail" colKey="available" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
+                                <AdminStatsSortTh label="Price" colKey="price" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
+                                <AdminStatsSortTh label="Runs" colKey="runs" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
+                                <AdminStatsSortTh label="Wkts" colKey="wickets" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
+                                <AdminStatsSortTh label="Catches" colKey="catches" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
+                                <AdminStatsSortTh label="Pts" colKey="points" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
+                                <th className="px-4 py-3 text-zinc-400">Form</th>
+                                <th className="px-4 py-3" aria-label="Actions" />
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-white/10">
-                              {localPlayers.slice().sort((a, b) => a.name.localeCompare(b.name)).map((p) => (
+                              {adminSortedPlayers.map((p) => (
                                 <tr key={p.id} className="text-sm text-zinc-100">
                                   <td className="px-4 py-3 font-semibold text-white">{p.name}</td>
                                   <td className="px-4 py-3">

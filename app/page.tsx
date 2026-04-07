@@ -953,28 +953,34 @@ export default function Page() {
       runOuts: 0,
     }));
 
-    const batch = writeBatch(db);
-    for (const team of teams) {
-      const weekPts = computeWeekPoints(team, playersById);
-      batch.update(doc(db, "teams", team.uid), {
-        cumulativePoints: Math.round(((team.cumulativePoints ?? 0) + weekPts) * 10) / 10,
+    try {
+      await runAction("End gameweek", async () => {
+        const batch = writeBatch(db);
+        for (const team of teams) {
+          const weekPts = computeWeekPoints(team, playersById);
+          batch.update(doc(db, "teams", team.uid), {
+            cumulativePoints: Math.round(((team.cumulativePoints ?? 0) + weekPts) * 10) / 10,
+          });
+        }
+        for (const p of updatedPlayers) {
+          batch.update(doc(db, "players", String(p.id)), {
+            runs: p.runs,
+            wickets: p.wickets,
+            catches: p.catches,
+            wkCatches: p.wkCatches,
+            stumpings: p.stumpings,
+            runOuts: p.runOuts,
+            history: p.history,
+          });
+        }
+        batch.set(doc(db, "gameState", "current"), { currentGameweek: gw + 1 }, { merge: true });
+        await batch.commit();
       });
+      clearBuilder();
+      setTab("draft");
+    } catch {
+      /* runAction already set actionError */
     }
-    for (const p of updatedPlayers) {
-      batch.update(doc(db, "players", String(p.id)), {
-        runs: p.runs,
-        wickets: p.wickets,
-        catches: p.catches,
-        wkCatches: p.wkCatches,
-        stumpings: p.stumpings,
-        runOuts: p.runOuts,
-        history: p.history,
-      });
-    }
-    batch.set(doc(db, "gameState", "current"), { currentGameweek: gw + 1 }, { merge: true });
-    await batch.commit();
-    clearBuilder();
-    setTab("draft");
   }
 
   async function fullReset() {
@@ -1016,10 +1022,16 @@ export default function Page() {
     }
 
     batch.set(doc(db, "gameState", "current"), { currentGameweek: 1 }, { merge: true });
-    await batch.commit();
-    setUnsavedStats(false);
-    clearBuilder();
-    setTab("draft");
+    try {
+      await runAction("New season reset", async () => {
+        await batch.commit();
+      });
+      setUnsavedStats(false);
+      clearBuilder();
+      setTab("draft");
+    } catch {
+      /* runAction already set actionError */
+    }
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -1461,6 +1473,18 @@ export default function Page() {
                     </div>
                   ) : (
                     <div className="grid gap-6">
+
+                      <div className="rounded-2xl bg-sky-500/10 px-4 py-3 text-xs leading-relaxed text-sky-100 ring-1 ring-sky-500/25">
+                        <div className="font-semibold text-sky-50">Firebase league admin (required for End GW, Save stats, reset)</div>
+                        <p className="mt-1 text-sky-200/90">
+                          The PIN only unlocks this screen. Firestore also needs your account marked as league admin: in{" "}
+                          <span className="font-medium text-white">Firebase Console → Firestore → Start collection</span>, create collection{" "}
+                          <code className="rounded bg-black/30 px-1 font-mono text-[11px]">leagueAdmins</code>, add a document whose ID is{" "}
+                          <strong>your user id</strong> (copy below), leave the document empty or add a dummy field. Publish updated{" "}
+                          <code className="rounded bg-black/30 px-1 font-mono text-[11px]">firestore.rules</code> if you have not already.
+                        </p>
+                        <p className="mt-2 font-mono text-[11px] text-white break-all">UID: {authUser.uid}</p>
+                      </div>
 
                       {/* Action buttons */}
                       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">

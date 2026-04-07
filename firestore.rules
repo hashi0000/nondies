@@ -2,33 +2,44 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
+    // Legacy: Firebase Auth custom claim admin=true (set via Admin SDK)
     function isAdmin() { return signedIn() && request.auth.token.admin == true; }
-
-    // Players: everyone signed in can read, only admins can write.
-    match /players/{playerId} {
-      allow read: if signedIn();
-      allow create, update, delete: if isAdmin();
+    // League ops: one doc per admin — create leagueAdmins/{yourUid} in Console (empty doc is fine)
+    function isLeagueAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/leagueAdmins/$(request.auth.uid));
+    }
+    function canManageLeague() {
+      return isAdmin() || isLeagueAdmin();
     }
 
-    // Teams: doc id is the manager’s Firebase uid. (Legacy docs may omit createdBy.)
+    // Marker collection — only Firebase Console / Admin SDK can create these docs
+    match /leagueAdmins/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create, update, delete: if false;
+    }
+
+    match /players/{playerId} {
+      allow read: if signedIn();
+      allow create, update, delete: if canManageLeague();
+    }
+
     match /teams/{teamId} {
       allow read: if signedIn();
       allow create: if signedIn()
         && teamId == request.auth.uid
         && request.resource.data.createdBy == request.auth.uid;
-      allow update, delete: if signedIn() && teamId == request.auth.uid;
+      allow update, delete: if signedIn() && (teamId == request.auth.uid || isLeagueAdmin());
     }
 
-    // Game state: readable by signed-in users; writable by admins.
     match /gameState/{docId} {
       allow read: if signedIn();
-      allow create, update, delete: if isAdmin();
+      allow create, update, delete: if canManageLeague();
     }
 
-    // Snapshots: admin-only (used for rewind/restore).
     match /snapshots/{snapshotId} {
-      allow read: if isAdmin();
-      allow create, update, delete: if isAdmin();
+      allow read: if canManageLeague();
+      allow create, update, delete: if canManageLeague();
     }
   }
 }

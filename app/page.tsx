@@ -41,7 +41,16 @@ import {
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { calculatePoints, clampNonNegativeInt } from "@/lib/fantasyPoints";
-import { BUDGET, type PlayerRole, ROLE_LABEL, SQUAD_ROLES, SQUAD_SIZE } from "@/lib/leagueConfig";
+import {
+  BUDGET,
+  FREE_TRANSFERS_PER_WEEK,
+  MAX_BANKED_FREE_TRANSFERS,
+  POINTS_PER_EXTRA_TRANSFER,
+  type PlayerRole,
+  ROLE_LABEL,
+  SQUAD_ROLES,
+  SQUAD_SIZE,
+} from "@/lib/leagueConfig";
 import { normalizePlayCricketName } from "@/lib/playCricket/names";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -1758,6 +1767,14 @@ export default function Page() {
                           <code className="rounded bg-black/30 px-1 font-mono text-[11px]">firestore.rules</code> if you have not already.
                         </p>
                         <p className="mt-2 font-mono text-[11px] text-white break-all">UID: {authUser.uid}</p>
+                      </div>
+
+                      <div className="rounded-xl bg-white/[0.04] px-4 py-3 text-xs leading-relaxed text-zinc-400 ring-1 ring-white/10">
+                        <span className="font-semibold text-zinc-200">Transfer policy</span> (shown on Rules; not auto-deducted in the app yet):{" "}
+                        <strong className="text-zinc-300">{FREE_TRANSFERS_PER_WEEK}</strong> free change per gameweek, up to{" "}
+                        <strong className="text-zinc-300">{MAX_BANKED_FREE_TRANSFERS}</strong> free changes if banked, then{" "}
+                        <strong className="text-zinc-300">−{POINTS_PER_EXTRA_TRANSFER}</strong> league points per extra change. Committee can change the penalty in{" "}
+                        <code className="rounded bg-black/30 px-1 font-mono text-[11px] text-zinc-300">lib/leagueConfig.ts</code>.
                       </div>
 
                       {/* Action buttons */}

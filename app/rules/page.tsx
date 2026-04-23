@@ -1,7 +1,15 @@
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowLeft, Award, Calendar, ChevronRight, Crown, Dices, Gavel, Layers, Star, TrendingUp, Trophy, Users, Zap } from "lucide-react";
-import { BUDGET, ROLE_LABEL, SQUAD_ROLES, SQUAD_SIZE } from "@/lib/leagueConfig";
+import { ArrowLeft, Award, Calendar, ChevronRight, Crown, Dices, Gavel, Layers, Repeat, Star, TrendingUp, Trophy, Users, Zap } from "lucide-react";
+import {
+  BUDGET,
+  FREE_TRANSFERS_PER_WEEK,
+  MAX_BANKED_FREE_TRANSFERS,
+  POINTS_PER_EXTRA_TRANSFER,
+  ROLE_LABEL,
+  SQUAD_ROLES,
+  SQUAD_SIZE,
+} from "@/lib/leagueConfig";
 
 export const metadata = {
   title: "How to Play — Nondies Fantasy League",
@@ -78,6 +86,7 @@ const TOC = [
   { id: "overview",    label: "Overview" },
   { id: "regulations", label: "League regulations" },
   { id: "team",        label: "Building your team" },
+  { id: "transfers",   label: "Transfers" },
   { id: "squads",      label: "1st XI & 2nd XI" },
   { id: "points",      label: "Points system" },
   { id: "roles",       label: "Captain, VC & WK" },
@@ -121,14 +130,19 @@ export default function RulesPage() {
             Sign in (Google or email), then pick <strong className="text-zinc-200">{SQUAD_SIZE} players</strong> from the club list within a{" "}
             <strong className="text-zinc-200">£{BUDGET}</strong> squad cap (compact squads — same spirit as larger fantasy games that use £55m for 11 or £35m for 6).
             Players are tagged <strong className="text-zinc-200">1st XI</strong> or <strong className="text-zinc-200">2nd XI</strong> with different price bands so you must mix tiers.
-            Assign captain, vice-captain and wicketkeeper, save to Firebase, and earn points from stats the admin records each gameweek.
+            Assign captain, vice-captain and wicketkeeper, save to Firebase, and earn points from stats the admin records each gameweek.{" "}
+            <strong className="text-zinc-300">Transfers:</strong>{" "}
+            <strong className="text-zinc-200">{FREE_TRANSFERS_PER_WEEK}</strong> free change per gameweek (up to{" "}
+            <strong className="text-zinc-200">{MAX_BANKED_FREE_TRANSFERS}</strong> banked); each extra change is planned at{" "}
+            <strong className="text-zinc-200">−{POINTS_PER_EXTRA_TRANSFER}</strong> league points — see <a href="#transfers" className="font-medium text-red-400 underline decoration-red-500/50 underline-offset-2 hover:text-red-300">Transfers</a> below.
           </p>
         </div>
 
         {/* Quick stats */}
-        <div className="mb-10 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="mb-10 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           <StatCard value={String(SQUAD_SIZE)} label="Players per squad" sub="1 captain · 1 VC · 1 WK" />
           <StatCard value={`£${BUDGET}`} label="Squad cap" sub="1st XI + 2nd XI mix" />
+          <StatCard value={`−${POINTS_PER_EXTRA_TRANSFER}`} label="Extra transfer" sub={`${FREE_TRANSFERS_PER_WEEK} free/wk · ${MAX_BANKED_FREE_TRANSFERS} max banked`} />
           <StatCard value="2×" label="Captain bonus" sub="VC gets 1.5×" />
           <StatCard value="∞" label="Gameweeks" sub="Points carry over" />
         </div>
@@ -199,9 +213,12 @@ export default function RulesPage() {
                   <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-2">Transfers &amp; captain</div>
                   <ul className="grid gap-2 text-sm text-zinc-300 list-disc pl-4">
                     <li>
-                      <strong className="text-white">Intended rules:</strong> one <strong className="text-white">free transfer</strong> per gameweek, rolling up to a maximum of{" "}
-                      <strong className="text-white">two</strong> free transfers; extra transfers cost <strong className="text-white">20 league points</strong> each (value editable by the league).
-                      Changes take effect from the <strong className="text-white">following</strong> gameweek. If the captain is transferred out, you must name a new captain.
+                      <strong className="text-white">Transfer allowance (league defaults):</strong>{" "}
+                      <strong className="text-white">{FREE_TRANSFERS_PER_WEEK}</strong> free player change per gameweek. Unused free transfers roll over so you can have up to{" "}
+                      <strong className="text-white">{MAX_BANKED_FREE_TRANSFERS}</strong> free changes banked for a busy week. Each change beyond that costs{" "}
+                      <strong className="text-white">{POINTS_PER_EXTRA_TRANSFER} points</strong> off your league total (committee can retune anytime in{" "}
+                      <code className="rounded bg-black/40 px-1 font-mono text-[11px] text-zinc-200">lib/leagueConfig.ts</code> as <code className="rounded bg-black/40 px-1 font-mono text-[11px]">POINTS_PER_EXTRA_TRANSFER</code>).
+                      Changes are meant to apply from the <strong className="text-white">following</strong> gameweek. If you transfer the captain out, pick a new captain.
                     </li>
                     <li>
                       <strong className="text-white">Pre-season window:</strong> unlimited free changes until midday on the published season start date (league-defined).
@@ -324,6 +341,36 @@ export default function RulesPage() {
                   </div>
                 </Card>
               </div>
+            </Section>
+
+            <Section id="transfers">
+              <SectionTitle icon={<Repeat className="h-5 w-5" />}>Transfers</SectionTitle>
+              <Card>
+                <ul className="space-y-3 text-sm leading-relaxed text-zinc-300">
+                  <li className="flex gap-3">
+                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-red-500/80" aria-hidden />
+                    <span>
+                      <strong className="text-white">{FREE_TRANSFERS_PER_WEEK} free transfer</strong> per gameweek. Unused frees can{" "}
+                      <strong className="text-white">bank</strong> up to <strong className="text-white">{MAX_BANKED_FREE_TRANSFERS}</strong> for later weeks (they do not stack beyond that cap).
+                    </span>
+                  </li>
+                  <li className="flex gap-3">
+                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-red-500/80" aria-hidden />
+                    <span>
+                      Each change beyond your free allowance (after bank is used) costs{" "}
+                      <strong className="text-white">−{POINTS_PER_EXTRA_TRANSFER}</strong> points deducted from your{" "}
+                      <strong className="text-white">cumulative league total</strong> for that gameweek (same scale as match points).
+                    </span>
+                  </li>
+                  <li className="flex gap-3">
+                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500/80" aria-hidden />
+                    <span className="text-zinc-400">
+                      The app does not yet count transfers or apply this penalty automatically — admins track it for now. Numbers above match{" "}
+                      <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-xs text-zinc-200">lib/leagueConfig.ts</code>.
+                    </span>
+                  </li>
+                </ul>
+              </Card>
             </Section>
 
             {/* 1st XI & 2nd XI — matches app squad tiers */}

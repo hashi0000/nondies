@@ -22,3 +22,16 @@ export const ROLE_LABEL: Record<PlayerRole, string> = {
   bowl: "Bowler",
   wk: "WK",
 };
+
+// ─── Transfer policy (display + future enforcement) ─────────────────────────
+/** How many player changes count as “free” each gameweek before penalties apply. */
+export const FREE_TRANSFERS_PER_WEEK = 1;
+/**
+ * Max unused free transfers carried into the next gameweek (1 + 1 banked → 2 usable).
+ */
+export const MAX_BANKED_FREE_TRANSFERS = 2;
+/**
+ * League points deducted from the team for each transfer beyond the free allowance.
+ * Change this single value when the committee settles on a number.
+ */
+export const POINTS_PER_EXTRA_TRANSFER = 50;

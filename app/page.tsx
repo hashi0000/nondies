@@ -51,6 +51,13 @@ import {
   SQUAD_ROLES,
   SQUAD_SIZE,
 } from "@/lib/leagueConfig";
+import {
+  countOutgoingPlayerChanges,
+  freeTransfersAfterRollover,
+  MAX_FREE_TRANSFERS_IN_GW,
+  penaltyPointsForExtras,
+  transferExtrasAgainstFree,
+} from "@/lib/transfers";
 import { normalizePlayCricketName } from "@/lib/playCricket/names";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -96,6 +103,12 @@ type SavedTeam = {
   viceCaptain: number | null;
   keeper: number | null;
   cumulativePoints?: number;
+  /** Squad at start of current gameweek (for transfer counting). */
+  transferBaselinePlayers?: number[];
+  /** Free transfers available at GW start (before any saves this GW). */
+  freeTransfersAtGwStart?: number;
+  /** Points already deducted this GW from extra transfers (keeps cumulative in sync if squad is edited again). */
+  transferPenaltyPointsApplied?: number;
   createdBy?: string;
   createdAt?: unknown;
 };
@@ -826,6 +839,31 @@ export default function Page() {
     keeper: builder.keeper, byId: playersById,
   }), [builder, playersById]);
 
+  const mySavedTeam = useMemo(
+    () => (authUser ? teams.find((t) => t.uid === authUser.uid) : undefined),
+    [teams, authUser],
+  );
+
+  const transferSavePreview = useMemo(() => {
+    if (builder.selected.length !== SQUAD_SIZE) return null;
+    if (!mySavedTeam) {
+      return { kind: "first" as const };
+    }
+    const baseline =
+      mySavedTeam.transferBaselinePlayers?.length === SQUAD_SIZE
+        ? mySavedTeam.transferBaselinePlayers
+        : mySavedTeam.players;
+    const F =
+      typeof mySavedTeam.freeTransfersAtGwStart === "number" && Number.isFinite(mySavedTeam.freeTransfersAtGwStart)
+        ? Math.max(0, Math.min(Math.floor(mySavedTeam.freeTransfersAtGwStart), MAX_FREE_TRANSFERS_IN_GW))
+        : MAX_FREE_TRANSFERS_IN_GW;
+    const T = countOutgoingPlayerChanges(baseline, builder.selected);
+    const extras = transferExtrasAgainstFree(T, F);
+    const penaltyDue = penaltyPointsForExtras(extras);
+    const penaltyDelta = penaltyDue - (mySavedTeam.transferPenaltyPointsApplied ?? 0);
+    return { kind: "returning" as const, T, F, extras, penaltyDue, penaltyDelta };
+  }, [mySavedTeam, builder.selected]);
+
   const leaderboard = useMemo(() => {
     const rows = teams.map((t) => ({
       team: t,
@@ -887,19 +925,62 @@ export default function Page() {
     if (locked || !validation.ok || !authUser) return;
     setSavingTeam(true);
     try {
-      await runAction("Save team", async () =>
-        setDoc(doc(db, "teams", authUser.uid), {
-          name: builder.teamName.trim(),
-          ownerName: accountHolderName(authUser),
-          players: [...builder.selected],
-          captain: builder.captain,
-          viceCaptain: builder.viceCaptain,
-          keeper: builder.keeper,
-          createdBy: authUser.uid,
-          createdAt: serverTimestamp(),
-          cumulativePoints: 0,
-        }, { merge: true }),
-      );
+      await runAction("Save team", async () => {
+        const ref = doc(db, "teams", authUser.uid);
+        const snap = await getDoc(ref);
+        const existing = snap.exists()
+          ? savedTeamFromFirestoreDoc({ id: snap.id, data: () => snap.data() as Record<string, unknown> })
+          : null;
+
+        const newPlayers = [...builder.selected];
+        const prevCumulative = existing?.cumulativePoints ?? 0;
+
+        let baseline: number[];
+        let freeAtGwStart: number;
+
+        if (!existing) {
+          baseline = [...newPlayers];
+          freeAtGwStart = FREE_TRANSFERS_PER_WEEK;
+        } else {
+          const hasBaseline =
+            Array.isArray(existing.transferBaselinePlayers) &&
+            existing.transferBaselinePlayers.length === SQUAD_SIZE;
+          baseline = hasBaseline
+            ? [...existing.transferBaselinePlayers!]
+            : existing.players.length === SQUAD_SIZE
+              ? [...existing.players]
+              : [...newPlayers];
+          freeAtGwStart =
+            typeof existing.freeTransfersAtGwStart === "number" && Number.isFinite(existing.freeTransfersAtGwStart)
+              ? Math.max(0, Math.min(Math.floor(existing.freeTransfersAtGwStart), MAX_FREE_TRANSFERS_IN_GW))
+              : MAX_FREE_TRANSFERS_IN_GW;
+        }
+
+        const T = countOutgoingPlayerChanges(baseline, newPlayers);
+        const extras = transferExtrasAgainstFree(T, freeAtGwStart);
+        const penaltyDue = penaltyPointsForExtras(extras);
+        const oldApplied = existing?.transferPenaltyPointsApplied ?? 0;
+        const newCumulative = Math.round((prevCumulative - (penaltyDue - oldApplied)) * 10) / 10;
+
+        await setDoc(
+          ref,
+          {
+            name: builder.teamName.trim(),
+            ownerName: accountHolderName(authUser),
+            players: newPlayers,
+            captain: builder.captain,
+            viceCaptain: builder.viceCaptain,
+            keeper: builder.keeper,
+            createdBy: authUser.uid,
+            createdAt: serverTimestamp(),
+            cumulativePoints: newCumulative,
+            transferBaselinePlayers: baseline,
+            freeTransfersAtGwStart: freeAtGwStart,
+            transferPenaltyPointsApplied: penaltyDue,
+          },
+          { merge: true },
+        );
+      });
       setBuilder((prev) => ({ ...prev, teamName: "" }));
       setTab("leaderboard");
     } finally {
@@ -1146,8 +1227,12 @@ export default function Page() {
       const batch = writeBatch(db);
       for (const team of teams) {
         if (team.players.includes(id)) {
+          const nextPlayers = team.players.filter((pid) => pid !== id);
+          const base = team.transferBaselinePlayers ?? team.players;
+          const nextBaseline = base.filter((pid) => pid !== id);
           batch.update(doc(db, "teams", team.uid), {
-            players: team.players.filter((pid) => pid !== id),
+            players: nextPlayers,
+            ...(nextBaseline.length > 0 ? { transferBaselinePlayers: nextBaseline } : {}),
             captain: team.captain === id ? null : team.captain,
             viceCaptain: team.viceCaptain === id ? null : team.viceCaptain,
             keeper: team.keeper === id ? null : team.keeper,
@@ -1188,8 +1273,20 @@ export default function Page() {
         const batch = writeBatch(db);
         for (const team of teams) {
           const weekPts = computeWeekPoints(team, playersById);
+          const baseline =
+            team.transferBaselinePlayers?.length === SQUAD_SIZE ? team.transferBaselinePlayers : team.players;
+          const TEnd = countOutgoingPlayerChanges(baseline, team.players);
+          const F =
+            typeof team.freeTransfersAtGwStart === "number" && Number.isFinite(team.freeTransfersAtGwStart)
+              ? Math.max(0, Math.min(Math.floor(team.freeTransfersAtGwStart), MAX_FREE_TRANSFERS_IN_GW))
+              : MAX_FREE_TRANSFERS_IN_GW;
+          const unused = Math.max(0, F - TEnd);
+          const nextFree = freeTransfersAfterRollover(unused);
           batch.update(doc(db, "teams", team.uid), {
             cumulativePoints: Math.round(((team.cumulativePoints ?? 0) + weekPts) * 10) / 10,
+            transferBaselinePlayers: [...team.players],
+            freeTransfersAtGwStart: nextFree,
+            transferPenaltyPointsApplied: 0,
           });
         }
         for (const p of updatedPlayers) {
@@ -1575,6 +1672,40 @@ export default function Page() {
                         })}
                       </div>
 
+                      {validation.ok && transferSavePreview && !locked ? (
+                        <div className="rounded-xl bg-white/[0.04] px-3 py-2.5 text-xs leading-relaxed text-zinc-400 ring-1 ring-white/10">
+                          {transferSavePreview.kind === "first" ? (
+                            <span>
+                              First save: <strong className="text-zinc-200">no transfer charge</strong>. Your gameweek baseline becomes this squad.
+                            </span>
+                          ) : transferSavePreview.extras === 0 ? (
+                            <span>
+                              vs GW baseline: <strong className="text-zinc-200">{transferSavePreview.T}</strong> player{" "}
+                              {transferSavePreview.T === 1 ? "change" : "changes"} with{" "}
+                              <strong className="text-zinc-200">{transferSavePreview.F}</strong> free transfers — no point hit.
+                            </span>
+                          ) : (
+                            <span>
+                              vs GW baseline: <strong className="text-zinc-200">{transferSavePreview.T}</strong> changes,{" "}
+                              <strong className="text-zinc-200">{transferSavePreview.F}</strong> free →{" "}
+                              <strong className="text-amber-200">{transferSavePreview.extras}</strong> extra
+                              {transferSavePreview.extras === 1 ? "" : "s"} (GW hit <strong className="text-amber-200">−{transferSavePreview.penaltyDue}</strong> pts total).
+                              {transferSavePreview.penaltyDelta !== 0 ? (
+                                <>
+                                  {" "}
+                                  This save moves cumulative by{" "}
+                                  <strong className={transferSavePreview.penaltyDelta > 0 ? "text-amber-200" : "text-emerald-200"}>
+                                    {transferSavePreview.penaltyDelta > 0 ? "−" : "+"}
+                                    {Math.abs(transferSavePreview.penaltyDelta)}
+                                  </strong>{" "}
+                                  pts.
+                                </>
+                              ) : null}
+                            </span>
+                          )}
+                        </div>
+                      ) : null}
+
                       <button type="button" onClick={() => void saveTeam()} disabled={locked || !validation.ok || savingTeam}
                         className={["rounded-2xl px-4 py-3 text-sm font-bold transition ring-1",
                           locked || !validation.ok || savingTeam
@@ -1582,7 +1713,7 @@ export default function Page() {
                             : "bg-red-600 text-white ring-red-500/40 hover:bg-red-500"].join(" ")}>
                         {savingTeam ? "Saving…" : "Save team to Firebase"}
                       </button>
-                      <div className="text-xs text-zinc-500">Each account has one saved team. Saving overwrites your previous entry.</div>
+                      <div className="text-xs text-zinc-500">Each account has one saved team. Saving merges into Firebase; cumulative score includes automatic transfer hits.</div>
                     </div>
                   </CardBody>
                 </Card>
@@ -1770,10 +1901,11 @@ export default function Page() {
                       </div>
 
                       <div className="rounded-xl bg-white/[0.04] px-4 py-3 text-xs leading-relaxed text-zinc-400 ring-1 ring-white/10">
-                        <span className="font-semibold text-zinc-200">Transfer policy</span> (shown on Rules; not auto-deducted in the app yet):{" "}
-                        <strong className="text-zinc-300">{FREE_TRANSFERS_PER_WEEK}</strong> free change per gameweek, up to{" "}
-                        <strong className="text-zinc-300">{MAX_BANKED_FREE_TRANSFERS}</strong> free changes if banked, then{" "}
-                        <strong className="text-zinc-300">−{POINTS_PER_EXTRA_TRANSFER}</strong> league points per extra change. Committee can change the penalty in{" "}
+                        <span className="font-semibold text-zinc-200">Transfer policy</span> (enforced on save; rollover on End GW):{" "}
+                        <strong className="text-zinc-300">{FREE_TRANSFERS_PER_WEEK}</strong> free player change per gameweek, up to{" "}
+                        <strong className="text-zinc-300">{MAX_BANKED_FREE_TRANSFERS}</strong> banked, max{" "}
+                        <strong className="text-zinc-300">{MAX_FREE_TRANSFERS_IN_GW}</strong> free in hand, then{" "}
+                        <strong className="text-zinc-300">−{POINTS_PER_EXTRA_TRANSFER}</strong> league points per extra change. Tunables in{" "}
                         <code className="rounded bg-black/30 px-1 font-mono text-[11px] text-zinc-300">lib/leagueConfig.ts</code>.
                       </div>
 

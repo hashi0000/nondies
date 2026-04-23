@@ -23,7 +23,7 @@ export const ROLE_LABEL: Record<PlayerRole, string> = {
   wk: "WK",
 };
 
-// ─── Transfer policy (display + future enforcement) ─────────────────────────
+// ─── Transfer policy (rules + enforced in app on save / End GW) ─────────────
 /** How many player changes count as “free” each gameweek before penalties apply. */
 export const FREE_TRANSFERS_PER_WEEK = 1;
 /**

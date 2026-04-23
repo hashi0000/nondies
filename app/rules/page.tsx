@@ -184,7 +184,9 @@ export default function RulesPage() {
                   After matches, league admins update each player&apos;s stats in the app (by hand or using the{" "}
                   <strong className="text-white">Play Cricket</strong> import where configured). Points for that gameweek are calculated from those numbers.
                   Your <strong className="text-white">leaderboard total is cumulative</strong> across the season; when the admin ends a gameweek,
-                  weekly stats reset to zero for the next round while your running total stays on your team.
+                  weekly stats reset to zero for the next round while your running total stays on your team.{" "}
+                  <strong className="text-zinc-300">Scoring:</strong> a player&apos;s draft role (batter, bowler, etc.) does not limit their points — if a batter bowls
+                  (or a bowler bats), you get runs, wickets, catches and milestones from whatever the admin enters on their row, same formula for everyone.
                 </p>
               </Card>
             </Section>
@@ -227,8 +229,10 @@ export default function RulesPage() {
                       <strong className="text-white">Wildcard:</strong> once per season, one gameweek of unlimited free transfers (league-operated).
                     </li>
                     <li>
-                      <strong className="text-white">What the app does today:</strong> while selections are unlocked you may <strong className="text-white">replace your whole squad</strong> before
-                      each lock — there is <strong className="text-white">no</strong> in-app transfer bank, point penalties for extra moves, rollover counters, wildcard flag, or &quot;effective next GW&quot; queue yet.
+                      <strong className="text-white">What the app enforces:</strong> while selections are unlocked you may edit your squad; on <strong className="text-white">Save</strong>, player changes vs your
+                      gameweek baseline are counted. Free transfers roll over when the admin <strong className="text-white">ends a gameweek</strong> (capped as above); extra changes deduct{" "}
+                      <strong className="text-white">{POINTS_PER_EXTRA_TRANSFER}</strong> league points per change from your cumulative total. Wildcard / &quot;next GW only&quot; queue / separate transfer budget are{" "}
+                      <strong className="text-white">not</strong> implemented.
                     </li>
                     <li>
                       <strong className="text-white">Price rises &amp; falls:</strong> full rules may award extra transfer budget when a player you own rises in price, and claw back budget on falls.
@@ -363,9 +367,9 @@ export default function RulesPage() {
                     </span>
                   </li>
                   <li className="flex gap-3">
-                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500/80" aria-hidden />
+                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500/80" aria-hidden />
                     <span className="text-zinc-400">
-                      The app does not yet count transfers or apply this penalty automatically — admins track it for now. Numbers above match{" "}
+                      The app applies this on save and rolls free transfers forward when an admin ends the gameweek. Tunables live in{" "}
                       <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-xs text-zinc-200">lib/leagueConfig.ts</code>.
                     </span>
                   </li>
@@ -416,6 +420,7 @@ export default function RulesPage() {
                 <Card>
                   <p className="text-xs text-zinc-500 mb-3">
                     Scoring matches the app&apos;s calculator: run points plus a single run-milestone bonus, then wickets, outfield catches, and keeper-related bonuses.
+                    The draft list role (batter vs bowler, etc.) is only for squad composition — if a batter takes wickets or a bowler scores runs in real life, you get those stats as entered.
                   </p>
                   <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-3">Batting &amp; bowling</div>
                   <Table
@@ -531,7 +536,7 @@ export default function RulesPage() {
                     <span className="font-semibold text-white">Wicketkeeper (required)</span>
                   </div>
                   <p className="text-sm text-zinc-400">
-                    The app requires you to tap <strong className="text-white">WK</strong> on one of your eleven players before you can save.
+                    The app requires you to tap <strong className="text-white">WK</strong> on one of your {SQUAD_SIZE} players before you can save.
                     Points are <strong className="text-white">not</strong> boosted just because someone is your WK — the same formula applies to everyone.
                     Wicketkeeping catches, stumpings and run-outs in the <strong className="text-white">player stats table</strong> are what add the keeper bonuses;
                     the admin should enter those on the player who actually kept or was credited on the scorecard.

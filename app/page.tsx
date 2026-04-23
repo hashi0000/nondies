@@ -549,6 +549,9 @@ export default function Page() {
 
   // Save team state
   const [savingTeam, setSavingTeam] = useState(false);
+  /** After Firestore has ever had a non-empty roster, empty snapshot will not re-seed (avoids “deleted players came back”). */
+  const playersSeededMarkerSentRef = useRef(false);
+  const emptyPlayersSeedInFlightRef = useRef(false);
 
   // Leaderboard: view another team's XI
   const [teamModal, setTeamModal] = useState<SavedTeam | null>(null);
@@ -588,6 +591,9 @@ export default function Page() {
 
   // Firestore: listen to players collection (single source of truth)
   useEffect(() => {
+    let cancelled = false;
+    const gsRef = doc(db, "gameState", "current");
+
     const unsub = onSnapshot(collection(db, "players"), (snap) => {
       const list = snap.docs
         .map((d) => {
@@ -611,25 +617,50 @@ export default function Page() {
         .filter((p) => Number.isFinite(p.id) && p.name);
 
       if (list.length === 0) {
-        // Seed Firestore roster once (fresh project)
-        const batch = writeBatch(db);
-        for (const p of SEEDED_PLAYERS) {
-          batch.set(doc(db, "players", String(p.id)), {
-            name: p.name,
-            teamTier: p.teamTier,
-            role: p.role,
-            price: p.price,
-            runs: p.runs,
-            wickets: p.wickets,
-            catches: p.catches,
-            wkCatches: p.wkCatches,
-            stumpings: p.stumpings,
-            runOuts: p.runOuts,
-            available: p.available,
-          });
-        }
-        void batch.commit();
+        void (async () => {
+          if (cancelled || emptyPlayersSeedInFlightRef.current) return;
+          try {
+            const gsSnap = await getDoc(gsRef);
+            if (cancelled) return;
+            const leagueAlreadyHadPlayers = gsSnap.exists() && gsSnap.data()?.playersSeeded === true;
+            if (leagueAlreadyHadPlayers) {
+              setPlayers([]);
+              setFsReady(true);
+              setFsError(null);
+              return;
+            }
+            emptyPlayersSeedInFlightRef.current = true;
+            const batch = writeBatch(db);
+            for (const p of SEEDED_PLAYERS) {
+              batch.set(doc(db, "players", String(p.id)), {
+                name: p.name,
+                teamTier: p.teamTier,
+                role: p.role,
+                price: p.price,
+                runs: p.runs,
+                wickets: p.wickets,
+                catches: p.catches,
+                wkCatches: p.wkCatches,
+                stumpings: p.stumpings,
+                runOuts: p.runOuts,
+                available: p.available,
+              });
+            }
+            batch.set(gsRef, { playersSeeded: true }, { merge: true });
+            await batch.commit();
+          } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
+            if (!cancelled) setFsError(`Could not seed players: ${msg}`);
+            emptyPlayersSeedInFlightRef.current = false;
+          }
+        })();
         return;
+      }
+
+      emptyPlayersSeedInFlightRef.current = false;
+      if (!playersSeededMarkerSentRef.current) {
+        playersSeededMarkerSentRef.current = true;
+        void setDoc(gsRef, { playersSeeded: true }, { merge: true });
       }
 
       list.sort((a, b) => a.id - b.id);
@@ -640,7 +671,10 @@ export default function Page() {
       setFsError(err?.message ?? "Failed to read players.");
       setFsReady(true);
     });
-    return () => unsub();
+    return () => {
+      cancelled = true;
+      unsub();
+    };
   }, []);
 
   // Firestore: listen to teams collection
@@ -1350,7 +1384,7 @@ export default function Page() {
       );
     }
 
-    batch.set(doc(db, "gameState", "current"), { currentGameweek: 1 }, { merge: true });
+    batch.set(doc(db, "gameState", "current"), { currentGameweek: 1, playersSeeded: true }, { merge: true });
     try {
       await runAction("New season reset", async () => {
         await batch.commit();

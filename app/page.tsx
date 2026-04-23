@@ -41,6 +41,7 @@ import {
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { calculatePoints, clampNonNegativeInt } from "@/lib/fantasyPoints";
+import { BUDGET, type PlayerRole, ROLE_LABEL, SQUAD_ROLES, SQUAD_SIZE } from "@/lib/leagueConfig";
 import { normalizePlayCricketName } from "@/lib/playCricket/names";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -62,6 +63,8 @@ type TeamTier = 1 | 2;
 type Player = {
   id: number;
   name: string;
+  /** Bat / all-rounder / bowler / wicketkeeper — squad must be 2-2-2-1. */
+  role: PlayerRole;
   /** 1 = first team, 2 = second team — used for filters and pricing bands. */
   teamTier: TeamTier;
   price: number;
@@ -106,58 +109,65 @@ type BuilderState = {
 
 type TabKey = "draft" | "leaderboard" | "players" | "admin";
 
-type AdminStatsSortKey = "name" | "teamTier" | "available" | "price" | "runs" | "wickets" | "catches" | "points";
+type AdminStatsSortKey = "name" | "role" | "teamTier" | "available" | "price" | "runs" | "wickets" | "catches" | "points";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const APP_NAME = "Nondies Fantasy League";
 const ADMIN_PIN = "1234";
-const SQUAD_SIZE = 11;
-const BUDGET = 100;
 
 /** Display labels for the squad tier (first XI vs second XI). */
 const TEAM_TIER_SHORT: Record<TeamTier, string> = { 1: "1st XI", 2: "2nd XI" };
 
+/** Admin-seeded primary position (must allow building 3 bat, 2 AR, 3 bowl, 1 WK from the pool). */
+const SEED_ROLE: Record<number, PlayerRole> = {
+  1: "bat", 2: "ar", 3: "bat", 4: "bowl", 5: "bat", 6: "ar", 7: "bat", 8: "bowl",
+  9: "ar", 10: "bat", 11: "wk", 12: "bowl", 13: "bowl", 14: "bat", 15: "wk",
+  16: "bowl", 17: "wk", 18: "bat", 19: "bat", 20: "ar", 21: "bat", 22: "bowl",
+  23: "bat", 24: "bat", 25: "bowl", 26: "ar", 27: "ar", 28: "bat", 29: "wk",
+  30: "bowl", 31: "ar", 32: "bowl", 33: "wk", 34: "bowl", 35: "bat",
+};
+
 /**
  * Seeded roster: ids 1–18 = 1st XI (£12–£18), ids 19–35 = 2nd XI (£5–£8).
- * Cheapest eleven 1st-XI players sum to £150, so an all–1st-XI team is impossible within £100.
+ * Cheapest seven 1st-XI picks still exceed BUDGET, so an all–1st-XI squad is impossible within cap.
  */
 const SEEDED_PLAYERS: Player[] = [
-  { id: 1,  name: "Arfan Ahmed",             teamTier: 1, price: 18, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 2,  name: "Kamran Ahmed",            teamTier: 1, price: 16, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 3,  name: "Hetu Hirpara",            teamTier: 1, price: 16, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 4,  name: "Danial Khan",             teamTier: 1, price: 16, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 5,  name: "Nabeel Khan",             teamTier: 1, price: 15, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 6,  name: "Sayyid Hashim Ali Shah",  teamTier: 1, price: 15, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 7,  name: "Bharadwaj Tanikella",     teamTier: 1, price: 15, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 8,  name: "Sarim Zafar",             teamTier: 1, price: 14, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 9,  name: "Pablo Mukherjee",         teamTier: 1, price: 17, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 10, name: "Aizaz Khan",              teamTier: 1, price: 15, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 11, name: "Mohammad Awais Abid",     teamTier: 1, price: 14, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 12, name: "Sulayman Warraich",       teamTier: 1, price: 14, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 13, name: "Hadi Ali",                teamTier: 1, price: 13, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 14, name: "Ismaeil Saghir",          teamTier: 1, price: 15, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 15, name: "Joseph Asplet",           teamTier: 1, price: 13, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 16, name: "Gareth Spackman",         teamTier: 1, price: 13, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 17, name: "Nicholas Smith",          teamTier: 1, price: 12, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 18, name: "Ross Brown",              teamTier: 1, price: 12, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 19, name: "William Goodfellow",      teamTier: 2, price: 6,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 20, name: "Zain Raja",               teamTier: 2, price: 6,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 21, name: "Nayyer Ahmed",            teamTier: 2, price: 6,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 22, name: "Haris Malak",             teamTier: 2, price: 6,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 23, name: "Rameez Ali",              teamTier: 2, price: 5,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 24, name: "Ayaz Khan",               teamTier: 2, price: 5,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 25, name: "Asif Shah",               teamTier: 2, price: 5,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 26, name: "Adnaan Rahman",           teamTier: 2, price: 5,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 27, name: "A Sidhu",                 teamTier: 2, price: 8,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 28, name: "Abdullah Akhlaq",         teamTier: 2, price: 6,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 29, name: "Alexander Dellar",        teamTier: 2, price: 5,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 30, name: "Atif Mohammed",           teamTier: 2, price: 6,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 31, name: "Gaurav Samuel",           teamTier: 2, price: 6,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 32, name: "Ibraheem Mirza",          teamTier: 2, price: 6,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 33, name: "Muhammed Anas Awais",     teamTier: 2, price: 5,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 34, name: "Shabaaz Alam",            teamTier: 2, price: 7,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 35, name: "Sulaiman Hussain",        teamTier: 2, price: 6,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 1,  name: "Arfan Ahmed",             role: SEED_ROLE[1],  teamTier: 1, price: 18, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 2,  name: "Kamran Ahmed",            role: SEED_ROLE[2],  teamTier: 1, price: 16, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 3,  name: "Hetu Hirpara",            role: SEED_ROLE[3],  teamTier: 1, price: 16, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 4,  name: "Danial Khan",             role: SEED_ROLE[4],  teamTier: 1, price: 16, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 5,  name: "Nabeel Khan",             role: SEED_ROLE[5],  teamTier: 1, price: 15, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 6,  name: "Sayyid Hashim Ali Shah",  role: SEED_ROLE[6],  teamTier: 1, price: 15, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 7,  name: "Bharadwaj Tanikella",     role: SEED_ROLE[7],  teamTier: 1, price: 15, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 8,  name: "Sarim Zafar",             role: SEED_ROLE[8],  teamTier: 1, price: 14, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 9,  name: "Pablo Mukherjee",         role: SEED_ROLE[9],  teamTier: 1, price: 17, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 10, name: "Aizaz Khan",              role: SEED_ROLE[10], teamTier: 1, price: 15, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 11, name: "Mohammad Awais Abid",     role: SEED_ROLE[11], teamTier: 1, price: 14, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 12, name: "Sulayman Warraich",       role: SEED_ROLE[12], teamTier: 1, price: 14, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 13, name: "Hadi Ali",                role: SEED_ROLE[13], teamTier: 1, price: 13, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 14, name: "Ismaeil Saghir",          role: SEED_ROLE[14], teamTier: 1, price: 15, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 15, name: "Joseph Asplet",           role: SEED_ROLE[15], teamTier: 1, price: 13, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 16, name: "Gareth Spackman",         role: SEED_ROLE[16], teamTier: 1, price: 13, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 17, name: "Nicholas Smith",          role: SEED_ROLE[17], teamTier: 1, price: 12, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 18, name: "Ross Brown",              role: SEED_ROLE[18], teamTier: 1, price: 12, runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 19, name: "William Goodfellow",      role: SEED_ROLE[19], teamTier: 2, price: 6,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 20, name: "Zain Raja",               role: SEED_ROLE[20], teamTier: 2, price: 6,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 21, name: "Nayyer Ahmed",            role: SEED_ROLE[21], teamTier: 2, price: 6,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 22, name: "Haris Malak",             role: SEED_ROLE[22], teamTier: 2, price: 6,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 23, name: "Rameez Ali",              role: SEED_ROLE[23], teamTier: 2, price: 5,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 24, name: "Ayaz Khan",               role: SEED_ROLE[24], teamTier: 2, price: 5,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 25, name: "Asif Shah",               role: SEED_ROLE[25], teamTier: 2, price: 5,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 26, name: "Adnaan Rahman",           role: SEED_ROLE[26], teamTier: 2, price: 5,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 27, name: "A Sidhu",                 role: SEED_ROLE[27], teamTier: 2, price: 8,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 28, name: "Abdullah Akhlaq",         role: SEED_ROLE[28], teamTier: 2, price: 6,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 29, name: "Alexander Dellar",        role: SEED_ROLE[29], teamTier: 2, price: 5,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 30, name: "Atif Mohammed",           role: SEED_ROLE[30], teamTier: 2, price: 6,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 31, name: "Gaurav Samuel",           role: SEED_ROLE[31], teamTier: 2, price: 6,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 32, name: "Ibraheem Mirza",          role: SEED_ROLE[32], teamTier: 2, price: 6,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 33, name: "Muhammed Anas Awais",     role: SEED_ROLE[33], teamTier: 2, price: 5,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 34, name: "Shabaaz Alam",            role: SEED_ROLE[34], teamTier: 2, price: 7,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 35, name: "Sulaiman Hussain",        role: SEED_ROLE[35], teamTier: 2, price: 6,  runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -173,6 +183,35 @@ function parseTeamTier(raw: unknown, playerId: number): TeamTier {
   if (raw === 2 || raw === "2") return 2;
   if (raw === 1 || raw === "1") return 1;
   return playerId >= 1 && playerId <= 18 ? 1 : 2;
+}
+
+function parsePlayerRole(raw: unknown, playerId: number): PlayerRole {
+  if (raw === "bat" || raw === "ar" || raw === "bowl" || raw === "wk") return raw;
+  return SEED_ROLE[playerId] ?? "bat";
+}
+
+function countRolesInSelection(ids: number[], byId: Map<number, Player>): Record<PlayerRole, number> {
+  const c: Record<PlayerRole, number> = { bat: 0, ar: 0, bowl: 0, wk: 0 };
+  for (const id of ids) {
+    const r = byId.get(id)?.role;
+    if (r) c[r] += 1;
+  }
+  return c;
+}
+
+/** True if adding `id` would not exceed any role cap (player not yet selected). */
+function canAddPlayerForRoles(id: number, selected: number[], byId: Map<number, Player>): boolean {
+  if (selected.includes(id)) return true;
+  const p = byId.get(id);
+  if (!p) return false;
+  const c = countRolesInSelection(selected, byId);
+  return c[p.role] < SQUAD_ROLES[p.role];
+}
+
+function squadCompositionOk(selected: number[], byId: Map<number, Player>): boolean {
+  if (selected.length !== SQUAD_SIZE) return false;
+  const c = countRolesInSelection(selected, byId);
+  return (Object.keys(SQUAD_ROLES) as PlayerRole[]).every((k) => c[k] === SQUAD_ROLES[k]);
 }
 
 function formatLockTime(d: Date) {
@@ -211,10 +250,10 @@ function computeTeamTotal(team: SavedTeam, byId: Map<number, Player>) {
   return Math.round((computeWeekPoints(team, byId) + (team.cumulativePoints ?? 0)) * 10) / 10;
 }
 
-function generateBestXI(players: Player[]) {
-  const scored = players.map((p) => ({ player: p, points: calculatePoints(p) })).sort((a, b) => b.points - a.points);
-  const top11 = scored.slice(0, 11);
-  return { entries: top11, captainId: top11[0]?.player.id ?? null, viceCaptainId: top11[1]?.player.id ?? null };
+function generateBestSquad(players: Player[]) {
+  const scored = players.map((p) => ({ player: p, points: calculatePoints(p) })).sort((a, b) => b.points - a.points || a.player.price - b.player.price);
+  const top = scored.slice(0, SQUAD_SIZE);
+  return { entries: top, captainId: top[0]?.player.id ?? null, viceCaptainId: top[1]?.player.id ?? null };
 }
 
 function validateTeam(args: {
@@ -225,26 +264,42 @@ function validateTeam(args: {
   const set = new Set(selected);
   const sel = selected.map((id) => byId.get(id)).filter(Boolean) as Player[];
   const spend = sel.reduce((s, p) => s + p.price, 0);
+  const compositionOk = squadCompositionOk(selected, byId);
+  const keeperPlayer = keeper !== null ? byId.get(keeper) : undefined;
+  const keeperIsWkRole = keeperPlayer?.role === "wk";
   const checks = {
     teamName: teamName.trim().length > 0,
     count: selected.length === SQUAD_SIZE,
     captain: captain !== null && set.has(captain),
     viceCaptain: viceCaptain !== null && set.has(viceCaptain),
-    keeper: keeper !== null && set.has(keeper),
+    keeper: keeper !== null && set.has(keeper) && keeperIsWkRole,
     withinBudget: spend <= BUDGET,
     uniqueLeadership: captain !== null && viceCaptain !== null ? captain !== viceCaptain : true,
     allAvailable: sel.every((p) => p.available),
+    composition: compositionOk,
   };
   const ok = Object.values(checks).every(Boolean);
   const problems: string[] = [];
   if (!checks.teamName) problems.push("Enter a team name.");
   if (!checks.count) problems.push(`Pick exactly ${SQUAD_SIZE} players.`);
+  if (!checks.composition) {
+    const c = countRolesInSelection(selected, byId);
+    problems.push(
+      `Squad must be ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} wicketkeeper (currently ${c.bat}/${c.ar}/${c.bowl}/${c.wk}).`,
+    );
+  }
   if (!checks.withinBudget) problems.push(`Stay within budget (${money(BUDGET)}).`);
   if (!checks.captain) problems.push("Select a captain (C).");
   if (!checks.viceCaptain) problems.push("Select a vice-captain (VC).");
   if (!checks.uniqueLeadership) problems.push("Captain and vice-captain must be different.");
-  if (!checks.keeper) problems.push("Select a wicketkeeper (WK).");
-  if (!checks.allAvailable) problems.push("Remove unavailable players from your XI.");
+  if (!checks.keeper) {
+    problems.push(
+      keeper !== null && set.has(keeper) && !keeperIsWkRole
+        ? "Wicketkeeper (WK) must be a player listed as WK."
+        : "Select a wicketkeeper (WK) on your WK-listed player.",
+    );
+  }
+  if (!checks.allAvailable) problems.push("Remove unavailable players from your squad.");
   return { ok, checks, spend, problems };
 }
 
@@ -459,7 +514,7 @@ export default function Page() {
       if (prev.key === key) {
         return { key, dir: prev.dir === "asc" ? "desc" : "asc" };
       }
-      const defaultAsc = key === "name" || key === "teamTier";
+      const defaultAsc = key === "name" || key === "teamTier" || key === "role";
       return { key, dir: defaultAsc ? "asc" : "desc" };
     });
   }, []);
@@ -468,6 +523,7 @@ export default function Page() {
   const [newName, setNewName] = useState("");
   const [newPrice, setNewPrice] = useState(5);
   const [newTeamTier, setNewTeamTier] = useState<TeamTier>(2);
+  const [newPlayerRole, setNewPlayerRole] = useState<PlayerRole>("bat");
 
   // Save team state
   const [savingTeam, setSavingTeam] = useState(false);
@@ -518,6 +574,7 @@ export default function Page() {
             id: Number(d.id),
             name: String(data.name ?? ""),
             teamTier: parseTeamTier(data.teamTier, Number(d.id)),
+            role: parsePlayerRole(data.role, Number(d.id)),
             price: Number(data.price ?? 0),
             runs: Number(data.runs ?? 0),
             wickets: Number(data.wickets ?? 0),
@@ -538,6 +595,7 @@ export default function Page() {
           batch.set(doc(db, "players", String(p.id)), {
             name: p.name,
             teamTier: p.teamTier,
+            role: p.role,
             price: p.price,
             runs: p.runs,
             wickets: p.wickets,
@@ -667,6 +725,11 @@ export default function Page() {
     [builder.selected, playersById]
   );
 
+  const draftRoleCounts = useMemo(
+    () => countRolesInSelection(builder.selected, playersById),
+    [builder.selected, playersById],
+  );
+
   const ownership = useMemo(() => {
     const map = new Map<number, number>();
     for (const t of teams) for (const id of t.players) map.set(id, (map.get(id) ?? 0) + 1);
@@ -716,6 +779,9 @@ export default function Page() {
         case "name":
           cmp = a.name.localeCompare(b.name);
           break;
+        case "role":
+          cmp = a.role.localeCompare(b.role);
+          break;
         case "teamTier":
           cmp = a.teamTier - b.teamTier;
           break;
@@ -763,7 +829,7 @@ export default function Page() {
     return rows;
   }, [teams, playersById]);
 
-  const bestXI = useMemo(() => generateBestXI(players), [players]);
+  const bestSquad = useMemo(() => generateBestSquad(players), [players]);
   const selectedCount = builder.selected.length;
   const budgetPct = Math.min(100, Math.max(0, (spend / BUDGET) * 100));
 
@@ -787,13 +853,16 @@ export default function Page() {
           viceCaptain: prev.viceCaptain === id ? null : prev.viceCaptain,
           keeper: prev.keeper === id ? null : prev.keeper };
       }
-      if (!p.available || prev.selected.length >= SQUAD_SIZE || spend + p.price > BUDGET) return prev;
+      const subSpend = prev.selected.reduce((s, pid) => s + (playersById.get(pid)?.price ?? 0), 0);
+      if (!p.available || prev.selected.length >= SQUAD_SIZE || subSpend + p.price > BUDGET) return prev;
+      if (!canAddPlayerForRoles(id, prev.selected, playersById)) return prev;
       return { ...prev, selected: [...prev.selected, id] };
     });
   }
 
   function setRole(role: "captain" | "viceCaptain" | "keeper", id: number) {
     if (locked) return;
+    if (role === "keeper" && playersById.get(id)?.role !== "wk") return;
     setBuilder((prev) => {
       if (!prev.selected.includes(id)) return prev;
       if ((role === "captain" && prev.viceCaptain === id) || (role === "viceCaptain" && prev.captain === id)) return prev;
@@ -916,6 +985,7 @@ export default function Page() {
             id: p.id,
             name: p.name,
             teamTier: p.teamTier,
+            role: p.role,
             price: p.price,
             runs: p.runs,
             wickets: p.wickets,
@@ -935,6 +1005,7 @@ export default function Page() {
             {
               name: p.name,
               teamTier: p.teamTier,
+              role: p.role,
               price: p.price,
               runs: p.runs,
               wickets: p.wickets,
@@ -989,6 +1060,7 @@ export default function Page() {
             {
               name: String(raw?.name ?? ""),
               teamTier: parseTeamTier(raw?.teamTier, id),
+              role: parsePlayerRole(raw?.role, id),
               price: clampNonNegativeInt(Number(raw?.price ?? 0)),
               runs: clampNonNegativeInt(Number(raw?.runs ?? 0)),
               wickets: clampNonNegativeInt(Number(raw?.wickets ?? 0)),
@@ -1016,6 +1088,7 @@ export default function Page() {
     const newPlayer: Player = {
       id: nextId,
       name,
+      role: newPlayerRole,
       teamTier: newTeamTier,
       price: newPrice,
       runs: 0,
@@ -1031,9 +1104,11 @@ export default function Page() {
     setLocalPlayers(updated);
     setNewName("");
     setNewPrice(5);
+    setNewPlayerRole("bat");
     await runAction("Add player", async () =>
       setDoc(doc(db, "players", String(newPlayer.id)), {
         name: newPlayer.name,
+        role: newPlayer.role,
         teamTier: newPlayer.teamTier,
         price: newPlayer.price,
         runs: 0,
@@ -1154,6 +1229,7 @@ export default function Page() {
         {
           name: p.name,
           teamTier: p.teamTier,
+          role: p.role,
           price: p.price,
           runs: 0,
           wickets: 0,
@@ -1262,7 +1338,7 @@ export default function Page() {
               <section className="lg:col-span-7">
                 <Card>
                   <CardHeader title="Draft pool"
-                    subtitle="1st XI players cost more than 2nd XI — you cannot afford eleven 1st XI picks within budget, so squads mix tiers."
+                    subtitle={`Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — max ${money(BUDGET)}. WK button only on WK-listed players. 1st XI costs more than 2nd XI.`}
                     right={
                       <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
                         <input type="checkbox" checked={onlyAvailable} onChange={(e) => setOnlyAvailable(e.target.checked)}
@@ -1339,7 +1415,8 @@ export default function Page() {
                         const selected = builder.selected.includes(p.id);
                         const wouldBust = !selected && spend + p.price > BUDGET;
                         const full = !selected && selectedCount >= SQUAD_SIZE;
-                        const disabled = locked || !p.available || wouldBust || full;
+                        const roleFull = !selected && !canAddPlayerForRoles(p.id, builder.selected, playersById);
+                        const disabled = locked || !p.available || wouldBust || full || roleFull;
                         const pickCount = ownership.get(p.id) ?? 0;
                         const ownershipPct = teams.length > 0 ? Math.round((pickCount / teams.length) * 100) : 0;
 
@@ -1363,13 +1440,15 @@ export default function Page() {
                                   <span className="font-medium text-zinc-200">{calculatePoints(p)} pts</span>
                                 </div>
                                 <div className="mt-2 flex flex-wrap items-center gap-2">
+                                  <Pill tone="amber">{ROLE_LABEL[p.role]}</Pill>
                                   <Pill tone={p.teamTier === 1 ? "blue" : "neutral"}>{TEAM_TIER_SHORT[p.teamTier]}</Pill>
                                   {p.available ? <Pill tone="green">Available</Pill> : <Pill tone="amber">Unavailable</Pill>}
                                   <Pill tone={teams.length > 0 && ownershipPct >= 50 ? "amber" : "neutral"}>
                                     {teams.length > 0 ? `${pickCount}/${teams.length} (${ownershipPct}%)` : "0 picked"}
                                   </Pill>
                                   {wouldBust ? <Pill tone="red">Over budget</Pill> : null}
-                                  {full ? <Pill tone="red">XI full</Pill> : null}
+                                  {full ? <Pill tone="red">Squad full</Pill> : null}
+                                  {roleFull ? <Pill tone="red">Role full</Pill> : null}
                                 </div>
                                 {p.history.length > 0 && <div className="mt-2"><FormDots history={p.history} /></div>}
                               </div>
@@ -1388,7 +1467,7 @@ export default function Page() {
 
               <section className="lg:col-span-5">
                 <Card>
-                  <CardHeader title="Your XI" subtitle="Assign captain, vice-captain, and wicketkeeper."
+                  <CardHeader title={`Your squad (${SQUAD_SIZE})`} subtitle={`Shape ${SQUAD_ROLES.bat}-${SQUAD_ROLES.ar}-${SQUAD_ROLES.bowl}-${SQUAD_ROLES.wk} (bat–AR–bowl–WK), then assign C, VC, and WK (WK only on the WK player).`}
                     right={
                       <button type="button" onClick={clearBuilder} disabled={locked && selectedCount > 0}
                         className="rounded-xl bg-white/5 px-3 py-2 text-xs font-semibold text-zinc-200 ring-1 ring-white/10 hover:bg-white/10 disabled:opacity-60">
@@ -1409,10 +1488,15 @@ export default function Page() {
                         <div className="mt-3 grid gap-2 text-sm">
                           {[
                             ["Players", `${selectedCount}/${SQUAD_SIZE}`, validation.checks.count],
+                            [
+                              "Shape",
+                              `Bat ${draftRoleCounts.bat}/${SQUAD_ROLES.bat} · AR ${draftRoleCounts.ar}/${SQUAD_ROLES.ar} · Bowl ${draftRoleCounts.bowl}/${SQUAD_ROLES.bowl} · WK ${draftRoleCounts.wk}/${SQUAD_ROLES.wk}`,
+                              validation.checks.composition,
+                            ],
                             ["Budget", `${money(validation.spend)} / ${money(BUDGET)}`, validation.checks.withinBudget],
                             ["Captain", builder.captain ? "Selected" : "Missing", validation.checks.captain],
                             ["Vice-captain", builder.viceCaptain ? "Selected" : "Missing", validation.checks.viceCaptain],
-                            ["Wicketkeeper", builder.keeper ? "Selected" : "Missing", validation.checks.keeper],
+                            ["Wicketkeeper", builder.keeper ? "On WK player" : "Missing", validation.checks.keeper],
                             ["Availability", validation.checks.allAvailable ? "OK" : "Issue", validation.checks.allAvailable],
                           ].map(([label, val, ok]) => (
                             <div key={String(label)} className="flex items-center justify-between">
@@ -1424,7 +1508,7 @@ export default function Page() {
                         {!validation.ok && validation.problems.length > 0 && (
                           <div className="mt-3 rounded-xl bg-amber-500/10 p-3 text-sm text-amber-200 ring-1 ring-amber-500/30">
                             <ul className="list-disc space-y-1 pl-4 text-amber-200/90">
-                              {validation.problems.slice(0, 5).map((prob) => <li key={prob}>{prob}</li>)}
+                              {validation.problems.slice(0, 8).map((prob) => <li key={prob}>{prob}</li>)}
                             </ul>
                           </div>
                         )}
@@ -1432,7 +1516,7 @@ export default function Page() {
 
                       <div className="divide-y divide-white/10 overflow-hidden rounded-2xl ring-1 ring-white/10">
                         {selectedSorted.length === 0 ? (
-                          <div className="p-4 text-sm text-zinc-400">Pick players from the pool to build your XI.</div>
+                          <div className="p-4 text-sm text-zinc-400">Pick players from the pool to build your squad.</div>
                         ) : selectedSorted.map((p) => {
                           const isC = builder.captain === p.id;
                           const isVC = builder.viceCaptain === p.id;
@@ -1443,20 +1527,25 @@ export default function Page() {
                                 <div className="min-w-0">
                                   <div className="truncate text-sm font-semibold text-white">{p.name}</div>
                                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
+                                    <Pill tone="amber">{ROLE_LABEL[p.role]}</Pill>
                                     <Pill tone={p.teamTier === 1 ? "blue" : "neutral"}>{TEAM_TIER_SHORT[p.teamTier]}</Pill>
                                     <span className="font-medium text-zinc-200">{money(p.price)}</span>
                                     {!p.available && <Pill tone="amber">Unavailable</Pill>}
                                   </div>
                                   <div className="mt-2 flex gap-2">
-                                    {(["captain", "viceCaptain", "keeper"] as const).map((role) => {
-                                      const active = role === "captain" ? isC : role === "viceCaptain" ? isVC : isWK;
-                                      const disabledRole = locked || (role === "captain" && isVC) || (role === "viceCaptain" && isC);
-                                      const label = role === "captain" ? "C" : role === "viceCaptain" ? "VC" : "WK";
-                                      const activeColor = role === "captain" ? "bg-red-600 text-white ring-red-500/40"
-                                        : role === "viceCaptain" ? "bg-amber-500 text-black ring-amber-400/50"
+                                    {(["captain", "viceCaptain", "keeper"] as const).map((roleBtn) => {
+                                      const active = roleBtn === "captain" ? isC : roleBtn === "viceCaptain" ? isVC : isWK;
+                                      const disabledRole =
+                                        locked
+                                        || (roleBtn === "captain" && isVC)
+                                        || (roleBtn === "viceCaptain" && isC)
+                                        || (roleBtn === "keeper" && p.role !== "wk");
+                                      const label = roleBtn === "captain" ? "C" : roleBtn === "viceCaptain" ? "VC" : "WK";
+                                      const activeColor = roleBtn === "captain" ? "bg-red-600 text-white ring-red-500/40"
+                                        : roleBtn === "viceCaptain" ? "bg-amber-500 text-black ring-amber-400/50"
                                         : "bg-sky-500 text-black ring-sky-400/50";
                                       return (
-                                        <button key={role} type="button" onClick={() => setRole(role, p.id)}
+                                        <button key={roleBtn} type="button" onClick={() => setRole(roleBtn, p.id)}
                                           disabled={!!disabledRole}
                                           className={["rounded-lg px-2.5 py-1.5 text-xs font-semibold ring-1 transition",
                                             active ? activeColor : "bg-white/5 text-zinc-200 ring-white/10 hover:bg-white/10",
@@ -1504,7 +1593,7 @@ export default function Page() {
                         <Trophy className="h-6 w-6 text-red-300" />
                       </div>
                       <div className="mt-3 text-base font-semibold">No teams yet</div>
-                      <div className="mt-1 text-sm text-zinc-400">Save your XI to appear here.</div>
+                      <div className="mt-1 text-sm text-zinc-400">Save your squad to appear here.</div>
                       <button type="button" onClick={() => setTab("draft")} className="mt-4 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white ring-1 ring-red-500/40 hover:bg-red-500">
                         Start drafting
                       </button>
@@ -1546,7 +1635,7 @@ export default function Page() {
                                 onClick={() => setTeamModal(row.team)}
                                 className="rounded-xl bg-white/5 px-3 py-2 text-xs font-semibold text-zinc-200 ring-1 ring-white/10 hover:bg-white/10"
                               >
-                                View XI
+                                View squad
                               </button>
                             </div>
                           </div>
@@ -1574,10 +1663,11 @@ export default function Page() {
                   </div>
                   <div className="overflow-hidden rounded-2xl ring-1 ring-white/10">
                     <div className="overflow-x-auto bg-zinc-950/40">
-                      <table className="min-w-[900px] w-full border-collapse">
+                      <table className="min-w-[980px] w-full border-collapse">
                         <thead className="bg-black/40 text-xs font-semibold text-zinc-300">
                           <tr>
                             <th className="px-4 py-3 text-left">Player</th>
+                            <th className="px-4 py-3 text-left">Role</th>
                             <th className="px-4 py-3 text-left">Squad</th>
                             <th className="px-4 py-3 text-right">Price</th>
                             <th className="px-4 py-3 text-right">Runs</th>
@@ -1593,6 +1683,7 @@ export default function Page() {
                           {playerPoints.map(({ player: p, points }) => (
                             <tr key={p.id}>
                               <td className="px-4 py-3 font-semibold text-white">{p.name}</td>
+                              <td className="px-4 py-3 text-zinc-300">{ROLE_LABEL[p.role]}</td>
                               <td className="px-4 py-3 text-zinc-300">{TEAM_TIER_SHORT[p.teamTier]}</td>
                               <td className="px-4 py-3 text-right text-zinc-200">{money(p.price)}</td>
                               <td className="px-4 py-3 text-right text-zinc-200">{p.runs}</td>
@@ -1779,15 +1870,15 @@ export default function Page() {
                         </div>
                       </div>
 
-                      {/* Best XI */}
+                      {/* Best squad preview */}
                       <div className="rounded-2xl bg-white/5 ring-1 ring-white/10">
                         <div className="flex items-center justify-between p-4 sm:p-5">
                           <div>
                             <div className="flex items-center gap-2 text-base font-semibold">
                               <Star className="h-4 w-4 text-amber-400" />
-                              Best XI — GW{currentGameweek}
+                              Best squad — GW{currentGameweek}
                             </div>
-                            <div className="mt-0.5 text-xs text-zinc-500">Top 11 performers based on current week&apos;s stats</div>
+                            <div className="mt-0.5 text-xs text-zinc-500">{`Top ${SQUAD_SIZE} performers based on current week’s stats`}</div>
                           </div>
                           <button type="button" onClick={() => setShowBestXI((v) => !v)}
                             className="inline-flex items-center gap-1.5 rounded-xl bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-300 ring-1 ring-amber-500/30 hover:bg-amber-500/20 transition">
@@ -1796,7 +1887,7 @@ export default function Page() {
                         </div>
                         {showBestXI && (
                           <div className="border-t border-white/10 p-4 sm:p-5">
-                            {bestXI.entries.length === 0 ? (
+                            {bestSquad.entries.length === 0 ? (
                               <div className="text-sm text-zinc-400">No players with stats yet. Enter stats below then check back.</div>
                             ) : (
                               <>
@@ -1811,9 +1902,9 @@ export default function Page() {
                                       </tr>
                                     </thead>
                                     <tbody className="divide-y divide-white/8">
-                                      {bestXI.entries.map(({ player, points }, i) => {
-                                        const isC = player.id === bestXI.captainId;
-                                        const isVC = player.id === bestXI.viceCaptainId;
+                                      {bestSquad.entries.map(({ player, points }, i) => {
+                                        const isC = player.id === bestSquad.captainId;
+                                        const isVC = player.id === bestSquad.viceCaptainId;
                                         const eff = Math.round(points * (isC ? 2 : isVC ? 1.5 : 1) * 10) / 10;
                                         return (
                                           <tr key={player.id} className={isC || isVC ? "bg-amber-500/5" : ""}>
@@ -1832,10 +1923,10 @@ export default function Page() {
                                   </table>
                                 </div>
                                 <div className="mt-3 text-right text-xs text-zinc-500">
-                                  Best XI total:{" "}
+                                  Best squad total:{" "}
                                   <span className="font-bold text-white">
-                                    {bestXI.entries.reduce((s, { player, points }) =>
-                                      Math.round((s + points * (player.id === bestXI.captainId ? 2 : player.id === bestXI.viceCaptainId ? 1.5 : 1)) * 10) / 10, 0)} pts
+                                    {bestSquad.entries.reduce((s, { player, points }) =>
+                                      Math.round((s + points * (player.id === bestSquad.captainId ? 2 : player.id === bestSquad.viceCaptainId ? 1.5 : 1)) * 10) / 10, 0)} pts
                                   </span>
                                 </div>
                               </>
@@ -1851,6 +1942,19 @@ export default function Page() {
                           <div className="flex-1 min-w-[180px]">
                             <TextField value={newName} onChange={setNewName} placeholder="Full name" label="Name" />
                           </div>
+                          <label className="block w-36">
+                            <div className="mb-1.5 text-xs font-medium text-zinc-300">Role</div>
+                            <select
+                              value={newPlayerRole}
+                              onChange={(e) => setNewPlayerRole(e.target.value as PlayerRole)}
+                              className="w-full rounded-xl bg-white/5 px-3 py-2.5 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-red-500/60"
+                            >
+                              <option value="bat">Batter</option>
+                              <option value="ar">All-rounder</option>
+                              <option value="bowl">Bowler</option>
+                              <option value="wk">WK</option>
+                            </select>
+                          </label>
                           <label className="block w-36">
                             <div className="mb-1.5 text-xs font-medium text-zinc-300">Squad</div>
                             <select
@@ -1894,10 +1998,11 @@ export default function Page() {
                           </button>
                         </div>
                         <div className="overflow-x-auto">
-                          <table className="w-full min-w-[1050px] border-collapse">
+                          <table className="w-full min-w-[1180px] border-collapse">
                             <thead className="bg-black/40">
                               <tr className="text-left text-xs font-semibold text-zinc-300">
                                 <AdminStatsSortTh label="Player" colKey="name" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
+                                <AdminStatsSortTh label="Role" colKey="role" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
                                 <AdminStatsSortTh label="Squad" colKey="teamTier" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
                                 <AdminStatsSortTh label="Avail" colKey="available" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
                                 <AdminStatsSortTh label="Price" colKey="price" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
@@ -1913,6 +2018,20 @@ export default function Page() {
                               {adminSortedPlayers.map((p) => (
                                 <tr key={p.id} className="text-sm text-zinc-100">
                                   <td className="px-4 py-3 font-semibold text-white">{p.name}</td>
+                                  <td className="px-4 py-3 w-36">
+                                    <select
+                                      value={p.role}
+                                      onChange={(e) =>
+                                        editLocalPlayer(p.id, { role: e.target.value as PlayerRole })
+                                      }
+                                      className="w-full rounded-lg bg-white/5 px-2 py-2 text-xs text-white ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-red-500/60"
+                                    >
+                                      <option value="bat">Batter</option>
+                                      <option value="ar">All-rounder</option>
+                                      <option value="bowl">Bowler</option>
+                                      <option value="wk">WK</option>
+                                    </select>
+                                  </td>
                                   <td className="px-4 py-3 w-32">
                                     <select
                                       value={p.teamTier}
@@ -2021,6 +2140,7 @@ export default function Page() {
                         <div className="truncate font-semibold text-white">{p.name}</div>
                         <div className="mt-1 flex flex-wrap gap-2 text-xs">
                           <Pill>{money(p.price)}</Pill>
+                          <Pill tone="amber">{ROLE_LABEL[p.role]}</Pill>
                           <Pill tone={p.teamTier === 1 ? "blue" : "neutral"}>{TEAM_TIER_SHORT[p.teamTier]}</Pill>
                           {isC ? <Pill tone="red">C</Pill> : null}
                           {isVC ? <Pill tone="amber">VC</Pill> : null}

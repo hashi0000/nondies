@@ -1,4 +1,4 @@
-/** Shared fantasy scoring — keep in sync with rules copy in the app. */
+/** Shared fantasy scoring — keep in sync with `app/rules/page.tsx`. */
 
 export function clampNonNegativeInt(n: number) {
   if (!Number.isFinite(n)) return 0;

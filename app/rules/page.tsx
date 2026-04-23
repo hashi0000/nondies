@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowLeft, Award, Calendar, ChevronRight, Crown, Dices, Star, TrendingUp, Trophy, Users, Zap } from "lucide-react";
+import { ArrowLeft, Award, Calendar, ChevronRight, Crown, Dices, Gavel, Layers, Star, TrendingUp, Trophy, Users, Zap } from "lucide-react";
+import { BUDGET, ROLE_LABEL, SQUAD_ROLES, SQUAD_SIZE } from "@/lib/leagueConfig";
 
 export const metadata = {
   title: "How to Play — Nondies Fantasy League",
@@ -75,9 +76,11 @@ function StatCard({ value, label, sub }: { value: string; label: string; sub?: s
 
 const TOC = [
   { id: "overview",    label: "Overview" },
+  { id: "regulations", label: "League regulations" },
   { id: "team",        label: "Building your team" },
+  { id: "squads",      label: "1st XI & 2nd XI" },
   { id: "points",      label: "Points system" },
-  { id: "roles",       label: "Captain & vice-captain" },
+  { id: "roles",       label: "Captain, VC & WK" },
   { id: "gameweeks",   label: "Gameweeks & locks" },
   { id: "form",        label: "Form & history" },
   { id: "leaderboard", label: "Leaderboard" },
@@ -115,15 +118,17 @@ export default function RulesPage() {
           </div>
 
           <p className="mt-5 text-base leading-relaxed text-zinc-400 max-w-2xl">
-            Pick your best XI from the Oxford &amp; Bletchingdon Nondescripts squad, assign your captain and vice-captain,
-            and earn points based on real match performances every weekend.
+            Sign in (Google or email), then pick <strong className="text-zinc-200">{SQUAD_SIZE} players</strong> from the club list within a{" "}
+            <strong className="text-zinc-200">£{BUDGET}</strong> squad cap (compact squads — same spirit as larger fantasy games that use £55m for 11 or £35m for 6).
+            Players are tagged <strong className="text-zinc-200">1st XI</strong> or <strong className="text-zinc-200">2nd XI</strong> with different price bands so you must mix tiers.
+            Assign captain, vice-captain and wicketkeeper, save to Firebase, and earn points from stats the admin records each gameweek.
           </p>
         </div>
 
         {/* Quick stats */}
         <div className="mb-10 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <StatCard value="11" label="Players per team" sub="1 captain · 1 VC · 1 WK" />
-          <StatCard value="£100" label="Budget" sub="Spread it wisely" />
+          <StatCard value={String(SQUAD_SIZE)} label="Players per squad" sub="1 captain · 1 VC · 1 WK" />
+          <StatCard value={`£${BUDGET}`} label="Squad cap" sub="1st XI + 2nd XI mix" />
           <StatCard value="2×" label="Captain bonus" sub="VC gets 1.5×" />
           <StatCard value="∞" label="Gameweeks" sub="Points carry over" />
         </div>
@@ -154,17 +159,89 @@ export default function RulesPage() {
               <SectionTitle icon={<Dices className="h-5 w-5" />}>Overview</SectionTitle>
               <Card>
                 <p className="text-sm leading-relaxed text-zinc-300">
-                  Nondies Fantasy League is a weekly pick&apos;em game built around the club&apos;s actual match
-                  performances. Before each match, you select a squad of <strong className="text-white">11 players</strong>{" "}
-                  from the available pool within a <strong className="text-white">£100 budget</strong>. When the match is
-                  played, the admin enters real stats (runs, wickets, catches) and your team earns points based on
-                  how those players performed.
+                  Nondies Fantasy League runs in the browser against <strong className="text-white">Firebase</strong> (Firestore).
+                  Each signed-in account has <strong className="text-white">one saved team</strong>. You pick{" "}
+                  <strong className="text-white">{SQUAD_SIZE} players</strong> from the pool within <strong className="text-white">£{BUDGET}</strong>,
+                  choose a <strong className="text-white">captain</strong> (2× points), <strong className="text-white">vice-captain</strong> (1.5×) and a{" "}
+                  <strong className="text-white">wicketkeeper</strong> (required to save), then save. The app locks line-ups after{" "}
+                  <strong className="text-white">Friday 23:59</strong> (local time) each week.
                 </p>
                 <p className="mt-3 text-sm leading-relaxed text-zinc-300">
-                  Points <strong className="text-white">accumulate across every gameweek</strong> — so consistent
-                  pickers who spot in-form players early will climb the overall leaderboard over the season.
+                  After matches, league admins update each player&apos;s stats in the app (by hand or using the{" "}
+                  <strong className="text-white">Play Cricket</strong> import where configured). Points for that gameweek are calculated from those numbers.
+                  Your <strong className="text-white">leaderboard total is cumulative</strong> across the season; when the admin ends a gameweek,
+                  weekly stats reset to zero for the next round while your running total stays on your team.
                 </p>
               </Card>
+            </Section>
+
+            {/* League regulations — constitution-style; some items are policy vs in-app enforcement */}
+            <Section id="regulations">
+              <SectionTitle icon={<Gavel className="h-5 w-5" />}>League regulations</SectionTitle>
+              <div className="grid gap-3">
+                <Card>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-2">Accounts &amp; entries</div>
+                  <ul className="grid gap-2 text-sm text-zinc-300 list-disc pl-4">
+                    <li><strong className="text-white">One team per registered user.</strong> The app enforces a single Firestore document per account.</li>
+                    <li>
+                      <strong className="text-white">Squad value cap:</strong> in the app, <strong className="text-white">{SQUAD_SIZE} players</strong> and{" "}
+                      <strong className="text-white">£{BUDGET}</strong> maximum spend (scaled from a traditional £100 cap for 11 players). In a larger ruleset this
+                      corresponds to ideas like <strong className="text-white">£55m for 11</strong> or <strong className="text-white">£35m for 6</strong> — here we use a smaller squad and simple £ prices.
+                    </li>
+                    <li>
+                      <strong className="text-white">When scoring starts:</strong> league policy is that teams must be submitted before the season (or first gameweek) opens
+                      to score from GW1; late entries start from the gameweek after they joined, with <strong className="text-white">no backdated points</strong>. The app does not yet
+                      auto-enforce entry dates — the committee should apply this when reading the leaderboard.
+                    </li>
+                  </ul>
+                </Card>
+                <Card>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-2">Transfers &amp; captain</div>
+                  <ul className="grid gap-2 text-sm text-zinc-300 list-disc pl-4">
+                    <li>
+                      <strong className="text-white">Intended rules:</strong> one <strong className="text-white">free transfer</strong> per gameweek, rolling up to a maximum of{" "}
+                      <strong className="text-white">two</strong> free transfers; extra transfers cost <strong className="text-white">20 league points</strong> each (value editable by the league).
+                      Changes take effect from the <strong className="text-white">following</strong> gameweek. If the captain is transferred out, you must name a new captain.
+                    </li>
+                    <li>
+                      <strong className="text-white">Pre-season window:</strong> unlimited free changes until midday on the published season start date (league-defined).
+                    </li>
+                    <li>
+                      <strong className="text-white">Wildcard:</strong> once per season, one gameweek of unlimited free transfers (league-operated).
+                    </li>
+                    <li>
+                      <strong className="text-white">What the app does today:</strong> while selections are unlocked you may <strong className="text-white">replace your whole squad</strong> before
+                      each lock — there is <strong className="text-white">no</strong> in-app transfer bank, point penalties for extra moves, rollover counters, wildcard flag, or &quot;effective next GW&quot; queue yet.
+                    </li>
+                    <li>
+                      <strong className="text-white">Price rises &amp; falls:</strong> full rules may award extra transfer budget when a player you own rises in price, and claw back budget on falls.
+                      The app <strong className="text-white">does not</strong> track purchase price or a separate transfer budget — only the fixed £{BUDGET} cap when saving.
+                    </li>
+                  </ul>
+                </Card>
+                <Card>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-2">Squad composition (enforced in app)</div>
+                  <p className="text-sm text-zinc-400 mb-3">
+                    Each saved squad must have exactly <strong className="text-white">{SQUAD_ROLES.bat} {ROLE_LABEL.bat}s</strong>,{" "}
+                    <strong className="text-white">{SQUAD_ROLES.ar} {ROLE_LABEL.ar}s</strong>, <strong className="text-white">{SQUAD_ROLES.bowl} {ROLE_LABEL.bowl}s</strong>, and{" "}
+                    <strong className="text-white">{SQUAD_ROLES.wk} {ROLE_LABEL.wk}</strong> ({SQUAD_SIZE} players total, £{BUDGET} cap). The draft pool shows each player&apos;s role; you cannot add another player
+                    once that role slot is full. Only a <strong className="text-white">WK-listed</strong> player can receive the WK button — your designated keeper must be that player.
+                  </p>
+                  <p className="text-sm text-zinc-400">
+                    Admins set or correct roles under <strong className="text-white">Admin → Player stats</strong>. New players default to batter until changed.
+                  </p>
+                </Card>
+                <Card>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-2">Captain boosts (league policy)</div>
+                  <ul className="grid gap-2 text-sm text-zinc-300 list-disc pl-4">
+                    <li><strong className="text-white">In the app:</strong> captain <strong className="text-white">2×</strong>, vice-captain <strong className="text-white">1.5×</strong> each gameweek; you may change them whenever the squad is unlocked.</li>
+                    <li>
+                      <strong className="text-white">Triple captain chip:</strong> league rules may allow <strong className="text-white">one week per season</strong> at 3× on the captain.
+                      <strong className="text-white"> Not implemented</strong> in software yet.
+                    </li>
+                  </ul>
+                </Card>
+              </div>
             </Section>
 
             {/* Building your team */}
@@ -172,54 +249,113 @@ export default function RulesPage() {
               <SectionTitle icon={<Users className="h-5 w-5" />}>Building your team</SectionTitle>
               <div className="grid gap-3">
                 <Card>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-2">Rules</div>
-                      <ul className="grid gap-2 text-sm text-zinc-300">
-                        <li className="flex items-start gap-2">
-                          <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600/20 text-xs font-bold text-red-300">1</span>
-                          Pick exactly <strong className="text-white ml-1">11 players</strong>
-                        </li>
-                        <li className="flex items-start gap-2">
-                          <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600/20 text-xs font-bold text-red-300">2</span>
-                          Stay within the <strong className="text-white ml-1">£100 budget</strong> — each player has a price
-                        </li>
-                        <li className="flex items-start gap-2">
-                          <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600/20 text-xs font-bold text-red-300">3</span>
-                          Only pick <strong className="text-white ml-1">available players</strong> — the admin marks who is playing
-                        </li>
-                        <li className="flex items-start gap-2">
-                          <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600/20 text-xs font-bold text-red-300">4</span>
-                          Assign a <strong className="text-white ml-1">Captain (C)</strong>, <strong className="text-white">Vice-Captain (VC)</strong> and <strong className="text-white">Wicketkeeper (WK)</strong>
-                        </li>
-                        <li className="flex items-start gap-2">
-                          <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600/20 text-xs font-bold text-red-300">5</span>
-                          <strong className="text-white">Save your team</strong> before the Friday 23:59 lock
-                        </li>
-                      </ul>
+                  <div className="mb-6 rounded-xl bg-white/[0.04] px-4 py-3.5 ring-1 ring-white/10">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Squad shape (enforced in the app)</div>
+                    <p className="mt-2 text-sm leading-relaxed text-zinc-200">
+                      <strong className="text-white">{SQUAD_ROLES.bat}</strong> batters ·{" "}
+                      <strong className="text-white">{SQUAD_ROLES.ar}</strong> all-rounders ·{" "}
+                      <strong className="text-white">{SQUAD_ROLES.bowl}</strong> bowlers ·{" "}
+                      <strong className="text-white">{SQUAD_ROLES.wk}</strong> wicketkeeper
+                      <span className="text-zinc-500"> ({SQUAD_SIZE} picks, </span>
+                      <strong className="text-white">£{BUDGET}</strong>
+                      <span className="text-zinc-500"> cap). WK only on WK-listed players.</span>
+                    </p>
+                  </div>
+
+                  <div className="grid gap-8 lg:grid-cols-2 lg:gap-10">
+                    <div className="min-w-0">
+                      <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Checklist — before you save</h3>
+                      <ol className="space-y-4 text-sm text-zinc-300">
+                        {[
+                          { n: "1", title: <>Pick exactly <strong className="text-white">{SQUAD_SIZE} players</strong>.</> },
+                          {
+                            n: "2",
+                            title: <>Stay under the <strong className="text-white">£{BUDGET}</strong> squad cap.</>,
+                            note: "Each player has a listed price; your total spend cannot exceed the cap.",
+                          },
+                          {
+                            n: "3",
+                            title: <>Only <strong className="text-white">available</strong> players.</>,
+                            note: "The admin toggles who is selectable for the match.",
+                          },
+                          {
+                            n: "4",
+                            title: <>Assign <strong className="text-white">Captain (C)</strong>, <strong className="text-white">Vice-captain (VC)</strong>, and <strong className="text-white">Wicketkeeper (WK)</strong>.</>,
+                            note: "WK must be the player tagged WK in the pool.",
+                          },
+                          {
+                            n: "5",
+                            title: <><strong className="text-white">Save</strong> to Firestore before Friday 23:59 (your time).</>,
+                            note: "After lock you cannot edit until the gameweek is processed.",
+                          },
+                        ].map((row) => (
+                          <li key={row.n} className="flex gap-3">
+                            <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-red-600/25 text-xs font-bold text-red-200 ring-1 ring-red-500/35">
+                              {row.n}
+                            </span>
+                            <div className="min-w-0 pt-0.5 leading-relaxed">
+                              <div>{row.title}</div>
+                              {"note" in row && row.note ? (
+                                <div className="mt-1 text-xs leading-relaxed text-zinc-500">{row.note}</div>
+                              ) : null}
+                            </div>
+                          </li>
+                        ))}
+                      </ol>
                     </div>
-                    <div>
-                      <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-2">Each week</div>
-                      <ul className="grid gap-2 text-sm text-zinc-300">
-                        <li className="flex items-start gap-2"><span className="text-red-400 mt-0.5">→</span> You can change your entire XI each gameweek</li>
-                        <li className="flex items-start gap-2"><span className="text-red-400 mt-0.5">→</span> Your <strong className="text-white">previous points are kept</strong> — the leaderboard is cumulative</li>
-                        <li className="flex items-start gap-2"><span className="text-red-400 mt-0.5">→</span> The admin ends the gameweek after the match, locking in that week&apos;s points</li>
-                        <li className="flex items-start gap-2"><span className="text-red-400 mt-0.5">→</span> Player prices may change between gameweeks to reflect form</li>
+
+                    <div className="min-w-0 border-t border-white/10 pt-8 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-10">
+                      <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">How the season flows</h3>
+                      <ul className="space-y-4 text-sm text-zinc-300">
+                        {[
+                          "You can replace your whole squad any time the draft is unlocked (until Friday 23:59).",
+                          "Leaderboard totals are cumulative — earlier weeks still count.",
+                          "When the admin ends a gameweek, that week’s points are banked and the next gameweek opens.",
+                          "Player prices and 1st XI / 2nd XI tags change only when an admin saves them — never automatically.",
+                          "On the Draft tab, use All squads, 1st XI only, or 2nd XI only to filter the pool.",
+                        ].map((text) => (
+                          <li key={text} className="flex gap-3">
+                            <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-red-500/80" aria-hidden />
+                            <span className="min-w-0 leading-relaxed">{text}</span>
+                          </li>
+                        ))}
                       </ul>
                     </div>
                   </div>
                 </Card>
+              </div>
+            </Section>
 
-                {/* Price bands */}
+            {/* 1st XI & 2nd XI — matches app squad tiers */}
+            <Section id="squads">
+              <SectionTitle icon={<Layers className="h-5 w-5" />}>1st XI &amp; 2nd XI</SectionTitle>
+              <div className="grid gap-3">
                 <Card>
-                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-3">Typical price bands</div>
+                  <p className="text-sm leading-relaxed text-zinc-300">
+                    Every player has a <strong className="text-white">squad tier</strong> shown in the draft pool: <strong className="text-white">1st XI</strong> (first-team squad)
+                    or <strong className="text-white">2nd XI</strong> (second-team / value). The seeded roster uses higher prices for 1st XI and lower for 2nd XI so you{" "}
+                    <strong className="text-white">cannot</strong> afford {SQUAD_SIZE} cheapest 1st XI picks within £{BUDGET} — you must blend both tiers.
+                  </p>
+                  <p className="mt-3 text-sm leading-relaxed text-zinc-300">
+                    Default seeding in the app: roughly <strong className="text-white">18</strong> players as 1st XI and <strong className="text-white">17</strong> as 2nd XI.
+                    Admins can change tier and price per player in <strong className="text-white">Admin → Player stats</strong> (saved to Firestore).
+                  </p>
+                </Card>
+                <Card>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-3">Price bands (as shipped in the seed data)</div>
                   <Table
-                    headers={["Price range", "Tier"]}
+                    headers={["Squad", "Typical price range", "Purpose"]}
                     rows={[
-                      ["£13–£15", <span key="a" className="font-semibold text-amber-300">Elite — star all-rounders &amp; top batters</span>],
-                      ["£9–£12", <span key="b" className="font-semibold text-zinc-200">Solid — reliable contributors</span>],
-                      ["£6–£8",  <span key="c" className="text-zinc-300">Mid-tier — useful bits &amp; pieces</span>],
-                      ["£5",     <span key="d" className="text-zinc-500">Budget — fill your XI cheaply</span>],
+                      [
+                        <span key="t1" className="font-semibold text-sky-300">1st XI</span>,
+                        "£12 – £18",
+                        <span key="d1" className="text-zinc-300">Premium picks — high floor so a full 1st XI squad is over budget</span>,
+                      ],
+                      [
+                        <span key="t2" className="font-semibold text-zinc-200">2nd XI</span>,
+                        "£5 – £8",
+                        <span key="d2" className="text-zinc-300">{`Value picks — mix with 1st XI to finish under £${BUDGET}`}</span>,
+                      ],
                     ]}
                   />
                 </Card>
@@ -230,29 +366,46 @@ export default function RulesPage() {
             <Section id="points">
               <SectionTitle icon={<Zap className="h-5 w-5" />}>Points system</SectionTitle>
               <div className="grid gap-3">
-
                 <Card>
-                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-3">Base points</div>
+                  <p className="text-xs text-zinc-500 mb-3">
+                    Scoring matches the app&apos;s calculator: run points plus a single run-milestone bonus, then wickets, outfield catches, and keeper-related bonuses.
+                  </p>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-3">Batting &amp; bowling</div>
                   <Table
-                    headers={["Action", "Points"]}
+                    headers={["Stat", "Points"]}
                     rows={[
-                      ["1 run scored",    <span key="r" className="font-bold text-white">+1 pt</span>],
-                      ["1 wicket taken",  <span key="w" className="font-bold text-white">+16 pts</span>],
-                      ["1 catch taken",   <span key="c" className="font-bold text-white">+8 pts</span>],
+                      ["1 run scored", <span key="r" className="font-bold text-white">+1 pt</span>],
+                      ["1 wicket taken", <span key="w" className="font-bold text-white">+16 pts</span>],
                     ]}
                   />
                 </Card>
 
                 <Card>
                   <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-1">Run milestone bonuses</div>
-                  <p className="text-xs text-zinc-500 mb-3">Added on top of base run points. Only the highest milestone applies.</p>
+                  <p className="text-xs text-zinc-500 mb-3">Added on top of run points. <strong className="text-zinc-400">Only the highest milestone applies</strong> (same as the code: 100+ beats 75+ beats 50+, etc.).</p>
                   <Table
-                    headers={["Milestone", "Bonus", "Example (50 runs)"]}
+                    headers={["Milestone", "Bonus", "Example"]}
                     rows={[
                       ["25+ runs",  <span key="a" className="font-bold text-white">+5 pts</span>,  ""],
-                      ["50+ runs",  <span key="b" className="font-bold text-white">+10 pts</span>, <span key="c" className="text-zinc-300">50 base + 10 bonus = <strong className="text-white">60 pts</strong></span>],
+                      ["50+ runs",  <span key="b" className="font-bold text-white">+10 pts</span>, <span key="c" className="text-zinc-300">50 runs → 50 + 10 = <strong className="text-white">60 pts</strong> (before C/VC)</span>],
                       ["75+ runs",  <span key="d" className="font-bold text-white">+15 pts</span>, ""],
-                      ["100+ runs", <span key="e" className="font-bold text-white">+25 pts</span>, <span key="f" className="text-zinc-300">100 base + 25 bonus = <strong className="text-white">125 pts</strong></span>],
+                      ["100+ runs", <span key="e" className="font-bold text-white">+25 pts</span>, <span key="f" className="text-zinc-300">100 runs → 100 + 25 = <strong className="text-white">125 pts</strong></span>],
+                    ]}
+                  />
+                </Card>
+
+                <Card>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-1">Fielding &amp; wicketkeeping</div>
+                  <p className="text-xs text-zinc-500 mb-3">
+                    <strong className="text-zinc-400">Outfield catches</strong> use the &quot;catches&quot; total minus wicketkeeping catches. WK catches, stumpings and run-outs are scored separately (how the admin enters the row).
+                  </p>
+                  <Table
+                    headers={["Action", "Points"]}
+                    rows={[
+                      ["Outfield catch (each)", <span key="oc" className="font-bold text-white">+8 pts</span>],
+                      ["Wicketkeeping catch (each)", <span key="wk" className="font-bold text-white">+10 pts</span>],
+                      ["Stumping (each)", <span key="st" className="font-bold text-white">+12 pts</span>],
+                      ["Run-out involvement (each)", <span key="ro" className="font-bold text-white">+10 pts</span>],
                     ]}
                   />
                 </Card>
@@ -295,7 +448,7 @@ export default function RulesPage() {
 
             {/* Captain & VC */}
             <Section id="roles">
-              <SectionTitle icon={<Crown className="h-5 w-5" />}>Captain &amp; Vice-Captain</SectionTitle>
+              <SectionTitle icon={<Crown className="h-5 w-5" />}>Captain, vice-captain &amp; wicketkeeper</SectionTitle>
               <div className="grid gap-3 sm:grid-cols-2">
                 <Card>
                   <div className="mb-2 flex items-center gap-2">
@@ -328,12 +481,13 @@ export default function RulesPage() {
                 <Card className="sm:col-span-2">
                   <div className="mb-2 flex items-center gap-2">
                     <span className="rounded-md bg-sky-500/20 px-2 py-0.5 text-xs font-bold text-sky-300 ring-1 ring-sky-500/30">WK</span>
-                    <span className="font-semibold text-white">Wicketkeeper dismissals</span>
+                    <span className="font-semibold text-white">Wicketkeeper (required)</span>
                   </div>
                   <p className="text-sm text-zinc-400">
-                    You must designate one player as your wicketkeeper. They still earn all normal batting points, but their
-                    keeping dismissals score extra: wicketkeeping catches, stumpings and run-outs are all worth bonus points on top of
-                    standard fielding. A keeper who bats, keeps tidily and is involved in dismissals can rack up very big scores.
+                    The app requires you to tap <strong className="text-white">WK</strong> on one of your eleven players before you can save.
+                    Points are <strong className="text-white">not</strong> boosted just because someone is your WK — the same formula applies to everyone.
+                    Wicketkeeping catches, stumpings and run-outs in the <strong className="text-white">player stats table</strong> are what add the keeper bonuses;
+                    the admin should enter those on the player who actually kept or was credited on the scorecard.
                   </p>
                 </Card>
               </div>
@@ -349,11 +503,11 @@ export default function RulesPage() {
                       <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-3">Weekly timeline</div>
                       <ol className="relative border-l border-white/10 ml-2 grid gap-5">
                         {[
-                          { day: "Mon–Thu", text: "Select or update your XI. You can change it as many times as you like before the lock." },
+                          { day: "Mon–Thu", text: "Select or update your squad. You can change it as many times as you like before the lock." },
                           { day: "Fri 23:59", text: "Selection locks. No more changes until after the match.", highlight: true },
                           { day: "Weekend", text: "The match is played. Real performances recorded by the club." },
-                          { day: "Post-match", text: "Admin enters stats. Points calculated and added to the leaderboard." },
-                          { day: "Next week", text: "Admin ends the gameweek. Points carry over. New week opens for selection." },
+                          { day: "Post-match", text: "Admin updates stats (manually or via Play Cricket match import). Points for the week are computed from those numbers." },
+                          { day: "End GW", text: "Admin ends the gameweek: each team’s cumulative total increases by that week’s score; player weekly stats reset to zero for the next round." },
                         ].map((step) => (
                           <li key={step.day} className="ml-5">
                             <span className="absolute -left-1.5 mt-1 h-3 w-3 rounded-full bg-zinc-700 ring-2 ring-[#080808]" />
@@ -461,8 +615,8 @@ export default function RulesPage() {
                   </div>
                 </div>
                 <p className="mt-4 text-sm text-zinc-500">
-                  Your own entry is highlighted in red so you can find it quickly.
-                  The leaderboard updates in real-time as the admin enters stats.
+                  Your own entry is highlighted so you can find it quickly. The list syncs live from Firestore as teams and stats change.
+                  Tap <strong className="text-zinc-400">View squad</strong> to see another manager&apos;s picks, prices, squad tier (1st / 2nd XI) and base points for that week.
                 </p>
               </Card>
             </Section>
@@ -473,28 +627,32 @@ export default function RulesPage() {
               <div className="grid gap-3 sm:grid-cols-2">
                 {[
                   {
+                    title: "Mix 1st XI and 2nd XI",
+                    body: "The economy is built so you need value picks. Plan a few premium 1st XI stars, then fill the rest with 2nd XI players who still score if they play.",
+                  },
+                  {
                     title: "Captain the batter, not the bowler",
-                    body: "A century scores 125 pts and gets doubled to 250 with the captain bonus. Three wickets is 48 pts × 2 = 96. Back the top-order bat for your armband.",
+                    body: "A century is 125 base pts before multipliers — doubled as captain that is huge. Three wickets is 48 base pts × 2 = 96. Batsmen often win the armband race.",
                   },
                   {
                     title: "Watch ownership",
-                    body: "The draft pool shows how many teams have picked each player. If everyone has the same XI, you need differential picks to climb the table.",
+                    body: "The draft pool shows how many teams picked each player. Same XI as everyone else caps your upside; differentials matter.",
                   },
                   {
                     title: "Check availability early",
-                    body: "Only available players can be picked. Check the draft pool on match day to make sure none of your XI has been marked unavailable by the admin.",
+                    body: "Only players marked available can be in a saved team. If the admin toggles someone off before lock, swap them out or your save will fail validation.",
                   },
                   {
-                    title: "Form dots don&apos;t lie",
-                    body: "Five green dots = pick them. Five grey dots = probably skip unless they&apos;re underpriced. The form guide is your single best tool before lock.",
+                    title: "Form dots do not lie",
+                    body: "Green dots (60+ in a past week) mean big returns; greys mean no or little history. Oldest dot is on the left, newest on the right.",
                   },
                   {
-                    title: "Don&apos;t overspend on one player",
-                    body: "Spending £15 on one elite player leaves you scraping the barrel. A balanced squad with two or three £9–11 players often outperforms.",
+                    title: "Spread the budget",
+                    body: `Several mid-priced picks plus one or two punts often beats blowing most of the £${BUDGET} cap on a handful of 1st XI premiums with weak fillers.`,
                   },
                   {
-                    title: "Consistent > lucky",
-                    body: "One big week won&apos;t win the season. Two or three reliable picks who score 40–60 pts every week will rack up more total points than gambling on a ton that may not come.",
+                    title: "Consistency beats one miracle week",
+                    body: "The leaderboard is cumulative. Reliable 40–60 pt weeks add up across the season more than banking everything on one monster score.",
                   },
                 ].map((tip) => (
                   <Card key={tip.title}>
@@ -502,7 +660,7 @@ export default function RulesPage() {
                       <Star className="h-4 w-4 text-amber-400 shrink-0" />
                       <div className="font-semibold text-sm text-white">{tip.title}</div>
                     </div>
-                    <p className="text-sm text-zinc-400 leading-relaxed" dangerouslySetInnerHTML={{ __html: tip.body }} />
+                    <p className="text-sm text-zinc-400 leading-relaxed">{tip.body}</p>
                   </Card>
                 ))}
               </div>
@@ -511,7 +669,7 @@ export default function RulesPage() {
             {/* CTA */}
             <div className="rounded-2xl bg-red-600/10 ring-1 ring-red-500/20 p-6 text-center">
               <div className="text-xl font-bold text-white mb-1">Ready to play?</div>
-              <p className="text-sm text-zinc-400 mb-4">Pick your XI and lock it in before Friday 23:59.</p>
+              <p className="text-sm text-zinc-400 mb-4">Pick your squad and lock it in before Friday 23:59.</p>
               <Link href="/"
                 className="inline-flex items-center gap-2 rounded-xl bg-red-600 px-5 py-3 text-sm font-bold text-white ring-1 ring-red-500/40 hover:bg-red-500 transition">
                 Go to Draft

@@ -15,6 +15,7 @@ import {
   updateProfile,
 } from "firebase/auth";
 import { auth } from "@/lib/firebase";
+import { SQUAD_SIZE } from "@/lib/leagueConfig";
 
 const APP_NAME = "Nondies Fantasy League";
 
@@ -170,7 +171,7 @@ export default function LoginPage() {
                 </span>
               </h1>
               <p className="mt-2 text-[11px] text-zinc-300">
-                Weekly fantasy cricket built on real Nondies performances. Pick your XI every gameweek and compete on the club leaderboard.
+                Weekly fantasy cricket built on real Nondies performances. Pick {SQUAD_SIZE} players each gameweek and compete on the club leaderboard.
               </p>
             </div>
           </div>

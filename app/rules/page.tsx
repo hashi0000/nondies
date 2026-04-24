@@ -4,6 +4,8 @@ import { ArrowLeft, Award, Calendar, ChevronRight, Crown, Dices, Gavel, Layers, 
 import {
   BUDGET,
   FREE_TRANSFERS_PER_WEEK,
+  LINEUP_LOCK_SUMMARY,
+  LINEUP_LOCK_SUMMARY_SHORT,
   MAX_BANKED_FREE_TRANSFERS,
   POINTS_PER_EXTRA_TRANSFER,
   ROLE_LABEL,
@@ -178,7 +180,7 @@ export default function RulesPage() {
                   <strong className="text-white">{SQUAD_SIZE} players</strong> from the pool within <strong className="text-white">£{BUDGET}</strong>,
                   choose a <strong className="text-white">captain</strong> (2× points), <strong className="text-white">vice-captain</strong> (1.5×) and a{" "}
                   <strong className="text-white">wicketkeeper</strong> (required to save), then save. The app locks line-ups after{" "}
-                  <strong className="text-white">Friday 23:59</strong> (local time) each week.
+                  <strong className="text-white">{LINEUP_LOCK_SUMMARY}</strong> (local time) each week.
                 </p>
                 <p className="mt-3 text-sm leading-relaxed text-zinc-300">
                   After matches, league admins update each player&apos;s stats in the app (by hand or using the{" "}
@@ -306,7 +308,7 @@ export default function RulesPage() {
                           },
                           {
                             n: "5",
-                            title: <><strong className="text-white">Save</strong> to Firestore before Friday 23:59 (your time).</>,
+                            title: <><strong className="text-white">Save</strong> to Firestore before {LINEUP_LOCK_SUMMARY} (your time).</>,
                             note: "After lock you cannot edit until the gameweek is processed.",
                           },
                         ].map((row) => (
@@ -329,7 +331,7 @@ export default function RulesPage() {
                       <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">How the season flows</h3>
                       <ul className="space-y-4 text-sm text-zinc-300">
                         {[
-                          "You can replace your whole squad any time the draft is unlocked (until Friday 23:59).",
+                          `You can replace your whole squad any time the draft is unlocked (until ${LINEUP_LOCK_SUMMARY}).`,
                           "Leaderboard totals are cumulative — earlier weeks still count.",
                           "When the admin ends a gameweek, that week’s points are banked and the next gameweek opens.",
                           "Player prices and 1st XI / 2nd XI tags change only when an admin saves them — never automatically.",
@@ -555,8 +557,8 @@ export default function RulesPage() {
                       <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-3">Weekly timeline</div>
                       <ol className="relative border-l border-white/10 ml-2 grid gap-5">
                         {[
-                          { day: "Mon–Thu", text: "Select or update your squad. You can change it as many times as you like before the lock." },
-                          { day: "Fri 23:59", text: "Selection locks. No more changes until after the match.", highlight: true },
+                          { day: "Mon–Sat", text: "Select or update your squad. You can change it as many times as you like until the weekly lock." },
+                          { day: LINEUP_LOCK_SUMMARY_SHORT, text: "Selection locks. No more changes until the admin ends the gameweek.", highlight: true },
                           { day: "Weekend", text: "The match is played. Real performances recorded by the club." },
                           { day: "Post-match", text: "Admin updates stats (manually or via Play Cricket match import). Points for the week are computed from those numbers." },
                           { day: "End GW", text: "Admin ends the gameweek: each team’s cumulative total increases by that week’s score; player weekly stats reset to zero for the next round." },
@@ -721,7 +723,7 @@ export default function RulesPage() {
             {/* CTA */}
             <div className="rounded-2xl bg-red-600/10 ring-1 ring-red-500/20 p-6 text-center">
               <div className="text-xl font-bold text-white mb-1">Ready to play?</div>
-              <p className="text-sm text-zinc-400 mb-4">Pick your squad and lock it in before Friday 23:59.</p>
+              <p className="text-sm text-zinc-400 mb-4">Pick your squad and lock it in before {LINEUP_LOCK_SUMMARY}.</p>
               <Link href="/"
                 className="inline-flex items-center gap-2 rounded-xl bg-red-600 px-5 py-3 text-sm font-bold text-white ring-1 ring-red-500/40 hover:bg-red-500 transition">
                 Go to Draft

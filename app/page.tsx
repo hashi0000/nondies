@@ -44,6 +44,10 @@ import { calculatePoints, clampNonNegativeInt } from "@/lib/fantasyPoints";
 import {
   BUDGET,
   FREE_TRANSFERS_PER_WEEK,
+  LINEUP_LOCK_HOUR,
+  LINEUP_LOCK_MINUTE,
+  LINEUP_LOCK_SUMMARY,
+  LINEUP_LOCK_WEEKDAY,
   MAX_BANKED_FREE_TRANSFERS,
   POINTS_PER_EXTRA_TRANSFER,
   type PlayerRole,
@@ -247,9 +251,8 @@ function formatLockTime(d: Date) {
 
 function getThisWeeksLockDate(now = new Date()) {
   const lock = new Date(now);
-  const diffToFriday = 5 - lock.getDay();
-  lock.setDate(lock.getDate() + diffToFriday);
-  lock.setHours(23, 59, 0, 0);
+  lock.setDate(lock.getDate() + (LINEUP_LOCK_WEEKDAY - lock.getDay()));
+  lock.setHours(LINEUP_LOCK_HOUR, LINEUP_LOCK_MINUTE, 0, 0);
   return lock;
 }
 
@@ -773,8 +776,20 @@ export default function Page() {
   // ── Derived ────────────────────────────────────────────────────────────────
 
   const playersById = useMemo(() => new Map(players.map((p) => [p.id, p])), [players]);
-  const locked = useMemo(() => isSelectionLocked(), []);
-  const lockDate = useMemo(() => getThisWeeksLockDate(), []);
+  /** Bumps on an interval so the lock flips at deadline without needing a full page reload. */
+  const [lockClock, setLockClock] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setLockClock((c) => c + 1), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+  const lockDate = useMemo(() => {
+    void lockClock;
+    return getThisWeeksLockDate(new Date());
+  }, [lockClock]);
+  const locked = useMemo(() => {
+    void lockClock;
+    return isSelectionLocked(new Date());
+  }, [lockClock]);
 
   const spend = useMemo(
     () => builder.selected.reduce((s, id) => s + (playersById.get(id)?.price ?? 0), 0),
@@ -1547,7 +1562,7 @@ export default function Page() {
                         <div className="flex items-start gap-2">
                           <Lock className="mt-0.5 h-4 w-4 shrink-0" />
                           <div>
-                            <div className="font-semibold">Selection locked after Friday 23:59.</div>
+                            <div className="font-semibold">Selection locked after {LINEUP_LOCK_SUMMARY} (your time).</div>
                             <div className="mt-1 text-amber-200/80">Ask an admin to end the gameweek after the weekend.</div>
                           </div>
                         </div>

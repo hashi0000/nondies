@@ -6,6 +6,27 @@ export const SQUAD_SIZE = 7;
 /** Price cap; scaled from £100 at 11 players (~£9.09/slot). */
 export const BUDGET = 64;
 
+/** Lineup lock in the user’s browser local time (`Date.getDay()` scale: 0 Sun … 6 Sat). */
+export const LINEUP_LOCK_WEEKDAY = 6;
+export const LINEUP_LOCK_HOUR = 10;
+export const LINEUP_LOCK_MINUTE = 30;
+
+const LINEUP_LOCK_DAY_NAME = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+] as const;
+
+/** Human-readable for rules/UI, e.g. "Saturday 10:30". */
+export const LINEUP_LOCK_SUMMARY = `${LINEUP_LOCK_DAY_NAME[LINEUP_LOCK_WEEKDAY]} ${LINEUP_LOCK_HOUR}:${String(LINEUP_LOCK_MINUTE).padStart(2, "0")}`;
+
+/** Short label for compact UI, e.g. "Sat 10:30". */
+export const LINEUP_LOCK_SUMMARY_SHORT = `Sat ${LINEUP_LOCK_HOUR}:${String(LINEUP_LOCK_MINUTE).padStart(2, "0")}`;
+
 export type PlayerRole = "bat" | "ar" | "bowl" | "wk";
 
 /** Required role counts per saved squad (must sum to SQUAD_SIZE). */

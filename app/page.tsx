@@ -1099,13 +1099,13 @@ export default function Page() {
     setSavingStats(true);
     try {
       await runAction("Save stats", async () => {
-        // Snapshot current Firestore state first so we can rewind if needed
+        // Snapshot what you are about to write (admin table = localPlayers, including unsaved cells)
         await addDoc(collection(db, "snapshots"), {
           gameweek: currentGameweek,
           createdAt: serverTimestamp(),
           createdBy: authUser?.uid ?? null,
           label: "auto-before-save",
-          players: players.map((p) => ({
+          players: localPlayers.map((p) => ({
             id: p.id,
             name: p.name,
             teamTier: p.teamTier,
@@ -1200,6 +1200,7 @@ export default function Page() {
         }
         await batch.commit();
       });
+      setUnsavedStats(false);
     } finally {
       setRestoringSnapshotId(null);
     }
@@ -1208,7 +1209,8 @@ export default function Page() {
   async function addPlayer() {
     const name = newName.trim();
     if (!name) return;
-    const nextId = Math.max(0, ...localPlayers.map((p) => p.id)) + 1;
+    const nextId =
+      Math.max(0, ...localPlayers.map((p) => p.id), ...players.map((p) => p.id)) + 1;
     const newPlayer: Player = {
       id: nextId,
       name,
@@ -1279,7 +1281,10 @@ export default function Page() {
 
   async function endGameweek() {
     const gw = currentGameweek;
-    const updatedPlayers = players.map((p) => ({
+    /** Use admin table when it has unsaved edits so GW points match what you see in Admin. */
+    const sourcePlayers = unsavedStats ? localPlayers : players;
+    const playersByIdForGw = new Map(sourcePlayers.map((p) => [p.id, p]));
+    const updatedPlayers = sourcePlayers.map((p) => ({
       ...p,
       history: [
         ...(p.history ?? []),
@@ -1306,7 +1311,7 @@ export default function Page() {
       await runAction("End gameweek", async () => {
         const batch = writeBatch(db);
         for (const team of teams) {
-          const weekPts = computeWeekPoints(team, playersById);
+          const weekPts = computeWeekPoints(team, playersByIdForGw);
           const baseline =
             team.transferBaselinePlayers?.length === SQUAD_SIZE ? team.transferBaselinePlayers : team.players;
           const TEnd = countOutgoingPlayerChanges(baseline, team.players);
@@ -1357,10 +1362,11 @@ export default function Page() {
 
     for (const team of teams) batch.delete(doc(db, "teams", team.uid));
 
-    for (const p of localPlayers) {
-      if (!seededIds.has(p.id)) {
-        batch.delete(doc(db, "players", String(p.id)));
-      }
+    const extraPlayerIds = new Set<number>();
+    for (const p of localPlayers) if (!seededIds.has(p.id)) extraPlayerIds.add(p.id);
+    for (const p of players) if (!seededIds.has(p.id)) extraPlayerIds.add(p.id);
+    for (const id of extraPlayerIds) {
+      batch.delete(doc(db, "players", String(id)));
     }
 
     for (const p of SEEDED_PLAYERS) {
@@ -1478,7 +1484,7 @@ export default function Page() {
               <section className="lg:col-span-7">
                 <Card>
                   <CardHeader title="Draft pool"
-                    subtitle={`Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — max ${money(BUDGET)}. WK button only on WK-listed players. 1st XI costs more than 2nd XI.`}
+                    subtitle={`Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — max ${money(BUDGET)}. WK button only on WK-listed players. 1st XI costs more than 2nd XI. Everyone sees the same player list — it updates live from Firestore when an admin changes the roster or saves stats.`}
                     right={
                       <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
                         <input type="checkbox" checked={onlyAvailable} onChange={(e) => setOnlyAvailable(e.target.checked)}
@@ -1549,8 +1555,14 @@ export default function Page() {
                     )}
 
                     <div className="mt-4 divide-y divide-white/10 overflow-hidden rounded-2xl ring-1 ring-white/10">
-                      {filteredPlayers.length === 0 ? (
-                        <div className="p-4 text-sm text-zinc-400">No players match your search.</div>
+                      {players.length === 0 ? (
+                        <div className="p-4 text-sm text-zinc-400">
+                          There are no players in Firestore yet (or the roster was cleared). League admins should open{" "}
+                          <strong className="text-zinc-200">Admin → Player stats</strong> to add players or run a season reset. Everyone sees the same pool once documents exist in the{" "}
+                          <code className="rounded bg-white/10 px-1 font-mono text-xs">players</code> collection.
+                        </div>
+                      ) : filteredPlayers.length === 0 ? (
+                        <div className="p-4 text-sm text-zinc-400">No players match your search or filters.</div>
                       ) : filteredPlayers.map((p) => {
                         const selected = builder.selected.includes(p.id);
                         const wouldBust = !selected && spend + p.price > BUDGET;
@@ -1883,7 +1895,7 @@ export default function Page() {
             <section className="lg:col-span-12">
               <Card>
                 <CardHeader title="Admin"
-                  subtitle="All changes save directly to Firebase and are visible to all users immediately."
+                  subtitle="The draft pool and leaderboard read live from Firestore for every signed-in user. Add/delete player and bulk availability apply immediately. Stat cells update everyone only after you click Save stats — End gameweek uses the numbers currently in this table (including unsaved cells)."
                   right={adminAuthed ? (
                     <button type="button" onClick={adminLogout}
                       className="inline-flex items-center gap-2 rounded-xl bg-white/5 px-3 py-2 text-xs font-semibold text-zinc-200 ring-1 ring-white/10 hover:bg-white/10">

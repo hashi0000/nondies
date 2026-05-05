@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "email:announce": "node tools/sendLeagueAnnouncement.mjs"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",

@@ -126,7 +126,23 @@
   }
   html {
     @apply font-sans;
+    color-scheme: dark;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Native <select> lists follow OS color-scheme; without dark, Chrome/Edge on
+     Windows often shows a white popup while options inherit page text-white. */
+  select {
+    color-scheme: dark;
+  }
+  select option,
+  select optgroup {
+    background-color: #18181b;
+    color: #fafafa;
+  }
+  select optgroup {
+    color: #a1a1aa;
+    font-weight: 600;
   }
 }

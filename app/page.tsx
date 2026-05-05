@@ -30,6 +30,7 @@ import {
   doc,
   deleteDoc,
   getDoc,
+  getDocs,
   limit,
   onSnapshot,
   orderBy,
@@ -63,6 +64,34 @@ import {
   transferExtrasAgainstFree,
 } from "@/lib/transfers";
 import { normalizePlayCricketName } from "@/lib/playCricket/names";
+
+/** Admin: zero every player’s weekly stat row and match history (player pool docs stay). */
+async function resetAllPlayerDocumentsStats() {
+  const playerSnap = await getDocs(collection(db, "players"));
+  const writeLimit = 450;
+  let batch = writeBatch(db);
+  let ops = 0;
+  const flush = async () => {
+    if (ops === 0) return;
+    await batch.commit();
+    batch = writeBatch(db);
+    ops = 0;
+  };
+  for (const d of playerSnap.docs) {
+    batch.update(d.ref, {
+      runs: 0,
+      wickets: 0,
+      catches: 0,
+      wkCatches: 0,
+      stumpings: 0,
+      runOuts: 0,
+      history: [],
+    });
+    ops += 1;
+    if (ops >= writeLimit) await flush();
+  }
+  await flush();
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -113,6 +142,11 @@ type SavedTeam = {
   freeTransfersAtGwStart?: number;
   /** Points already deducted this GW from extra transfers (keeps cumulative in sync if squad is edited again). */
   transferPenaltyPointsApplied?: number;
+  /**
+   * First gameweek a player contributes to weekly score for this team (set when they transfer in).
+   * Omitted IDs are treated as GW1 — only matters for picks after GW1 saves.
+   */
+  playerJoinedGameweek?: Record<string, number>;
   createdBy?: string;
   createdAt?: unknown;
 };
@@ -135,7 +169,35 @@ type BuilderState = {
 
 type TabKey = "draft" | "leaderboard" | "players" | "admin";
 
-type AdminStatsSortKey = "name" | "role" | "teamTier" | "available" | "price" | "runs" | "wickets" | "catches" | "points";
+type AdminStatsSortKey =
+  | "name"
+  | "role"
+  | "teamTier"
+  | "available"
+  | "price"
+  | "runs"
+  | "wickets"
+  | "catches"
+  | "points"
+  | "season";
+
+/** Draft pool sort column (paired with asc/desc). */
+type DraftSortKey =
+  | "id"
+  | "name"
+  | "role"
+  | "teamTier"
+  | "available"
+  | "price"
+  | "runs"
+  | "wickets"
+  | "catches"
+  | "wkCatches"
+  | "stumpings"
+  | "runOuts"
+  | "gwPoints"
+  | "seasonPts"
+  | "picked";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -260,9 +322,162 @@ function isSelectionLocked(now = new Date()) {
   return now.getTime() >= getThisWeeksLockDate(now).getTime();
 }
 
-function computeWeekPoints(team: SavedTeam, byId: Map<number, Player>) {
+/** Sum of completed-gameweek fantasy points (raw player score, before C/VC on a team). */
+function sumSeasonPointsFromHistory(history: WeekRecord[] | undefined) {
+  let s = 0;
+  for (const h of history ?? []) {
+    const n = Number(h?.points);
+    if (Number.isFinite(n)) s += n;
+  }
+  return Math.round(s * 10) / 10;
+}
+
+/** Clone for post-save reconciliation with Firestore snapshots (avoids stale-cache overwrites). */
+function clonePlayerAdminSnapshot(p: Player): Player {
+  return {
+    ...p,
+    history: Array.isArray(p.history) ? p.history.map((h) => ({ ...h })) : [],
+  };
+}
+
+/** True if listener-mapped player doc matches what we just committed from the admin table. */
+function firestorePlayerMatchesAdminSnapshot(fs: Player, committed: Player): boolean {
+  return (
+    fs.price === committed.price &&
+    fs.teamTier === committed.teamTier &&
+    fs.role === committed.role &&
+    fs.name === committed.name &&
+    fs.available === committed.available &&
+    fs.runs === committed.runs &&
+    fs.wickets === committed.wickets &&
+    fs.catches === committed.catches &&
+    fs.wkCatches === committed.wkCatches &&
+    fs.stumpings === committed.stumpings &&
+    fs.runOuts === committed.runOuts &&
+    JSON.stringify(fs.history) === JSON.stringify(committed.history)
+  );
+}
+
+function compareDraftPoolPlayers(
+  a: Player,
+  b: Player,
+  key: DraftSortKey,
+  dir: "asc" | "desc",
+  ownership: Map<number, number>,
+): number {
+  const mult = dir === "desc" ? -1 : 1;
+  let cmp = 0;
+  switch (key) {
+    case "id":
+      cmp = a.id - b.id;
+      break;
+    case "name":
+      cmp = a.name.localeCompare(b.name);
+      break;
+    case "role":
+      cmp = a.role.localeCompare(b.role);
+      break;
+    case "teamTier":
+      cmp = a.teamTier - b.teamTier;
+      break;
+    case "available":
+      cmp = Number(a.available) - Number(b.available);
+      break;
+    case "price":
+      cmp = a.price - b.price;
+      break;
+    case "runs":
+      cmp = a.runs - b.runs;
+      break;
+    case "wickets":
+      cmp = a.wickets - b.wickets;
+      break;
+    case "catches":
+      cmp = a.catches - b.catches;
+      break;
+    case "wkCatches":
+      cmp = a.wkCatches - b.wkCatches;
+      break;
+    case "stumpings":
+      cmp = a.stumpings - b.stumpings;
+      break;
+    case "runOuts":
+      cmp = a.runOuts - b.runOuts;
+      break;
+    case "gwPoints":
+      cmp = calculatePoints(a) - calculatePoints(b);
+      break;
+    case "seasonPts":
+      cmp = sumSeasonPointsFromHistory(a.history) - sumSeasonPointsFromHistory(b.history);
+      break;
+    case "picked":
+      cmp = (ownership.get(a.id) ?? 0) - (ownership.get(b.id) ?? 0);
+      break;
+    default:
+      cmp = 0;
+  }
+  if (cmp !== 0) return mult * cmp;
+  return a.name.localeCompare(b.name);
+}
+
+function playerFirstGameweekOnTeam(team: SavedTeam, playerId: number): number {
+  const m = team.playerJoinedGameweek;
+  if (!m || typeof m !== "object") return 1;
+  const raw = (m as Record<string, unknown>)[String(playerId)];
+  const n =
+    typeof raw === "number"
+      ? raw
+      : typeof raw === "string" && /^\d+$/.test(raw.trim())
+        ? Number(raw.trim())
+        : NaN;
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+}
+
+/**
+ * First time a player appears on a saved squad (new team or transfer in).
+ * GW1: they score in the opening gameweek like everyone else.
+ * GW2+: they only start counting from the *next* gameweek so they can’t farm points from stats already on the board.
+ */
+function firstScoringGameweekForNewSigning(currentGameweek: number): number {
+  return currentGameweek > 1 ? currentGameweek + 1 : 1;
+}
+
+function buildPlayerJoinedGameweekAfterSave(
+  existing: SavedTeam | null,
+  newPlayers: number[],
+  gameweek: number,
+): Record<string, number> {
+  const next: Record<string, number> = {};
+  if (!existing) {
+    const j = firstScoringGameweekForNewSigning(gameweek);
+    for (const id of newPlayers) next[String(id)] = j;
+    return next;
+  }
+  const prevMap = existing.playerJoinedGameweek ?? {};
+  const wasOnTeam = new Set(existing.players ?? []);
+  for (const id of newPlayers) {
+    const key = String(id);
+    if (wasOnTeam.has(id)) {
+      const v = prevMap[key];
+      let n =
+        typeof v === "number" && Number.isFinite(v)
+          ? Math.floor(v)
+          : typeof v === "string" && /^\d+$/.test(String(v).trim())
+            ? Number(String(v).trim())
+            : 1;
+      if (!Number.isFinite(n) || n < 1) n = 1;
+      next[key] = n;
+    } else {
+      next[key] = firstScoringGameweekForNewSigning(gameweek);
+    }
+  }
+  return next;
+}
+
+function computeWeekPoints(team: SavedTeam, byId: Map<number, Player>, scoringGameweek: number) {
   let total = 0;
   for (const id of team.players) {
+    if (playerFirstGameweekOnTeam(team, id) > scoringGameweek) continue;
     const p = byId.get(id);
     if (!p) continue;
     const base = calculatePoints(p);
@@ -271,8 +486,8 @@ function computeWeekPoints(team: SavedTeam, byId: Map<number, Player>) {
   return Math.round(total * 10) / 10;
 }
 
-function computeTeamTotal(team: SavedTeam, byId: Map<number, Player>) {
-  return Math.round((computeWeekPoints(team, byId) + (team.cumulativePoints ?? 0)) * 10) / 10;
+function computeTeamTotal(team: SavedTeam, byId: Map<number, Player>, scoringGameweek: number) {
+  return Math.round((computeWeekPoints(team, byId, scoringGameweek) + (team.cumulativePoints ?? 0)) * 10) / 10;
 }
 
 function generateBestSquad(players: Player[]) {
@@ -517,6 +732,11 @@ export default function Page() {
   const pinInputRef = useRef<HTMLInputElement | null>(null);
   /** After saving to Firestore, skip one sync from `players` → `localPlayers` so we don't overwrite with stale snapshot data before onSnapshot updates. */
   const skipPlayerSyncRef = useRef(false);
+  /**
+   * After “Save stats”, onSnapshot can briefly replay pre-write cache. Until `players` matches this
+   * snapshot, we do not replace `localPlayers` (prevents price / squad / role edits looking like they “reverted”).
+   */
+  const statsSavePendingRef = useRef<Player[] | null>(null);
   const [showBestXI, setShowBestXI] = useState(false);
 
   // Admin — local edits (not yet saved to Firestore)
@@ -744,6 +964,19 @@ export default function Page() {
   // Keep admin edit buffer in sync with Firestore unless they have unsaved edits
   useEffect(() => {
     if (unsavedStats) return;
+
+    const pending = statsSavePendingRef.current;
+    if (pending !== null) {
+      const ok =
+        pending.length === players.length &&
+        pending.every((want) => {
+          const got = players.find((x) => x.id === want.id);
+          return got !== undefined && firestorePlayerMatchesAdminSnapshot(got, want);
+        });
+      if (!ok) return;
+      statsSavePendingRef.current = null;
+    }
+
     if (skipPlayerSyncRef.current) {
       skipPlayerSyncRef.current = false;
       return;
@@ -811,15 +1044,20 @@ export default function Page() {
   const [onlyAvailable, setOnlyAvailable] = useState(true);
   /** Draft pool: show all, 1st XI only, or 2nd XI only. */
   const [draftTeamFilter, setDraftTeamFilter] = useState<"all" | "1" | "2">("all");
-  /** Draft pool list order (availability: available rows still listed first). */
-  const [draftSort, setDraftSort] = useState<"price_desc" | "price_asc" | "name">("price_desc");
+  /** Draft pool: column + direction (available players still listed first). */
+  const [draftSortKey, setDraftSortKey] = useState<DraftSortKey>("price");
+  const [draftSortDir, setDraftSortDir] = useState<"asc" | "desc">("desc");
+  /** Players tab table (available pool only — same as before). */
+  const [playersTabSortKey, setPlayersTabSortKey] = useState<DraftSortKey>("gwPoints");
+  const [playersTabSortDir, setPlayersTabSortDir] = useState<"asc" | "desc">("desc");
   const playerPoints = useMemo(
     () =>
       players
         .filter((p) => p.available)
-        .map((p) => ({ player: p, points: calculatePoints(p) }))
-        .sort((a, b) => b.points - a.points || a.player.price - b.player.price),
-    [players],
+        .slice()
+        .sort((a, b) => compareDraftPoolPlayers(a, b, playersTabSortKey, playersTabSortDir, ownership))
+        .map((p) => ({ player: p, points: calculatePoints(p) })),
+    [players, playersTabSortKey, playersTabSortDir, ownership],
   );
 
   const filteredPlayers = useMemo(() => {
@@ -830,16 +1068,9 @@ export default function Page() {
       .filter((p) => (q ? p.name.toLowerCase().includes(q) : true))
       .sort((a, b) => {
         if (a.available !== b.available) return a.available ? -1 : 1;
-        if (draftSort === "name") return a.name.localeCompare(b.name);
-        if (draftSort === "price_asc") {
-          if (a.price !== b.price) return a.price - b.price;
-          return a.name.localeCompare(b.name);
-        }
-        // price_desc (default)
-        if (b.price !== a.price) return b.price - a.price;
-        return a.name.localeCompare(b.name);
+        return compareDraftPoolPlayers(a, b, draftSortKey, draftSortDir, ownership);
       });
-  }, [players, draftTeamFilter, onlyAvailable, search, draftSort]);
+  }, [players, draftTeamFilter, onlyAvailable, search, draftSortKey, draftSortDir, ownership]);
 
   const adminSortedPlayers = useMemo(() => {
     const { key, dir } = adminStatsSort;
@@ -873,6 +1104,9 @@ export default function Page() {
           break;
         case "points":
           cmp = calculatePoints(a) - calculatePoints(b);
+          break;
+        case "season":
+          cmp = sumSeasonPointsFromHistory(a.history) - sumSeasonPointsFromHistory(b.history);
           break;
         default:
           cmp = 0;
@@ -916,14 +1150,14 @@ export default function Page() {
   const leaderboard = useMemo(() => {
     const rows = teams.map((t) => ({
       team: t,
-      weekPts: computeWeekPoints(t, playersById),
-      total: computeTeamTotal(t, playersById),
+      weekPts: computeWeekPoints(t, playersById, currentGameweek),
+      total: computeTeamTotal(t, playersById, currentGameweek),
       capName: t.captain ? playersById.get(t.captain)?.name ?? "—" : "—",
       vcName: t.viceCaptain ? playersById.get(t.viceCaptain)?.name ?? "—" : "—",
     }));
     rows.sort((a, b) => b.total - a.total || a.team.name.localeCompare(b.team.name));
     return rows;
-  }, [teams, playersById]);
+  }, [teams, playersById, currentGameweek]);
 
   const bestSquad = useMemo(() => generateBestSquad(players), [players]);
   const selectedCount = builder.selected.length;
@@ -983,6 +1217,7 @@ export default function Page() {
 
         const newPlayers = [...builder.selected];
         const prevCumulative = existing?.cumulativePoints ?? 0;
+        const playerJoinedGameweek = buildPlayerJoinedGameweekAfterSave(existing, newPlayers, currentGameweek);
 
         let baseline: number[];
         let freeAtGwStart: number;
@@ -1026,6 +1261,7 @@ export default function Page() {
             transferBaselinePlayers: baseline,
             freeTransfersAtGwStart: freeAtGwStart,
             transferPenaltyPointsApplied: penaltyDue,
+            playerJoinedGameweek,
           },
           { merge: true },
         );
@@ -1114,13 +1350,14 @@ export default function Page() {
     setSavingStats(true);
     try {
       await runAction("Save stats", async () => {
+        const committedSnapshot = localPlayers.map(clonePlayerAdminSnapshot);
         // Snapshot what you are about to write (admin table = localPlayers, including unsaved cells)
         await addDoc(collection(db, "snapshots"), {
           gameweek: currentGameweek,
           createdAt: serverTimestamp(),
           createdBy: authUser?.uid ?? null,
           label: "auto-before-save",
-          players: localPlayers.map((p) => ({
+          players: committedSnapshot.map((p) => ({
             id: p.id,
             name: p.name,
             teamTier: p.teamTier,
@@ -1138,7 +1375,7 @@ export default function Page() {
         });
 
         const batch = writeBatch(db);
-        for (const p of localPlayers) {
+        for (const p of committedSnapshot) {
           batch.set(
             doc(db, "players", String(p.id)),
             {
@@ -1159,7 +1396,7 @@ export default function Page() {
           );
         }
         await batch.commit();
-        skipPlayerSyncRef.current = true;
+        statsSavePendingRef.current = committedSnapshot;
       });
       setUnsavedStats(false);
       setSavedStatsFlash(true);
@@ -1170,6 +1407,7 @@ export default function Page() {
   }
 
   async function bulkAvailability(val: boolean) {
+    statsSavePendingRef.current = null;
     const updated = localPlayers.map((p) => ({ ...p, available: val }));
     setLocalPlayers(updated);
     skipPlayerSyncRef.current = true;
@@ -1182,6 +1420,7 @@ export default function Page() {
   }
 
   async function restoreSnapshot(snapshotId: string) {
+    statsSavePendingRef.current = null;
     setRestoringSnapshotId(snapshotId);
     try {
       await runAction("Restore snapshot", async () => {
@@ -1222,6 +1461,7 @@ export default function Page() {
   }
 
   async function addPlayer() {
+    statsSavePendingRef.current = null;
     const name = newName.trim();
     if (!name) return;
     const nextId =
@@ -1268,6 +1508,7 @@ export default function Page() {
 
   async function deletePlayer(id: number) {
     if (!window.confirm("Delete this player? This cannot be undone.")) return;
+    statsSavePendingRef.current = null;
     const updated = localPlayers.filter((p) => p.id !== id);
     setLocalPlayers(updated);
     skipPlayerSyncRef.current = true;
@@ -1295,6 +1536,7 @@ export default function Page() {
   }
 
   async function endGameweek() {
+    statsSavePendingRef.current = null;
     const gw = currentGameweek;
     /** Use admin table when it has unsaved edits so GW points match what you see in Admin. */
     const sourcePlayers = unsavedStats ? localPlayers : players;
@@ -1326,7 +1568,7 @@ export default function Page() {
       await runAction("End gameweek", async () => {
         const batch = writeBatch(db);
         for (const team of teams) {
-          const weekPts = computeWeekPoints(team, playersByIdForGw);
+          const weekPts = computeWeekPoints(team, playersByIdForGw, gw);
           const baseline =
             team.transferBaselinePlayers?.length === SQUAD_SIZE ? team.transferBaselinePlayers : team.players;
           const TEnd = countOutgoingPlayerChanges(baseline, team.players);
@@ -1364,52 +1606,90 @@ export default function Page() {
     }
   }
 
-  async function fullReset() {
+  async function resetSeasonStatsKeepSquads() {
     if (
       !window.confirm(
-        "New season reset: deletes ALL saved teams, removes any extra players you added in Admin, clears every seeded player’s stats and match history, and sets the league to GW1. Cannot be undone. Continue?",
+        "Starts a clean GW1 with 0 points for everyone: every team’s leaderboard “This week” and “Total” go to 0 (player stat rows cleared), cumulative scores and transfer hits reset — but each manager keeps the same squad, captain, and vice. Player pool is unchanged. Cannot be undone. Continue?",
       )
     ) {
       return;
     }
-    const batch = writeBatch(db);
-    const seededIds = new Set(SEEDED_PLAYERS.map((p) => p.id));
-
-    for (const team of teams) batch.delete(doc(db, "teams", team.uid));
-
-    const extraPlayerIds = new Set<number>();
-    for (const p of localPlayers) if (!seededIds.has(p.id)) extraPlayerIds.add(p.id);
-    for (const p of players) if (!seededIds.has(p.id)) extraPlayerIds.add(p.id);
-    for (const id of extraPlayerIds) {
-      batch.delete(doc(db, "players", String(id)));
-    }
-
-    for (const p of SEEDED_PLAYERS) {
-      batch.set(
-        doc(db, "players", String(p.id)),
-        {
-          name: p.name,
-          teamTier: p.teamTier,
-          role: p.role,
-          price: p.price,
-          runs: 0,
-          wickets: 0,
-          catches: 0,
-          wkCatches: 0,
-          stumpings: 0,
-          runOuts: 0,
-          available: p.available,
-          history: [],
-        },
-        { merge: true },
-      );
-    }
-
-    batch.set(doc(db, "gameState", "current"), { currentGameweek: 1, playersSeeded: true }, { merge: true });
+    statsSavePendingRef.current = null;
     try {
-      await runAction("New season reset", async () => {
-        await batch.commit();
-        skipPlayerSyncRef.current = true;
+      await runAction("Season reset — keep squads", async () => {
+        await resetAllPlayerDocumentsStats();
+
+        const teamSnap = await getDocs(collection(db, "teams"));
+        const writeLimit = 450;
+        let batch = writeBatch(db);
+        let ops = 0;
+        const flush = async () => {
+          if (ops === 0) return;
+          await batch.commit();
+          batch = writeBatch(db);
+          ops = 0;
+        };
+
+        for (const d of teamSnap.docs) {
+          const data = d.data() as Record<string, unknown>;
+          const plist = Array.isArray(data.players)
+            ? data.players.map((x) => Number(x)).filter((n) => Number.isFinite(n))
+            : [];
+          const patch: Record<string, unknown> = {
+            cumulativePoints: 0,
+            transferPenaltyPointsApplied: 0,
+            freeTransfersAtGwStart: FREE_TRANSFERS_PER_WEEK,
+            playerJoinedGameweek: {},
+          };
+          if (plist.length === SQUAD_SIZE) patch.transferBaselinePlayers = plist;
+          batch.update(d.ref, patch);
+          ops += 1;
+          if (ops >= writeLimit) await flush();
+        }
+
+        batch.set(doc(db, "gameState", "current"), { currentGameweek: 1 }, { merge: true });
+        ops += 1;
+        await flush();
+      });
+      setUnsavedStats(false);
+    } catch {
+      /* runAction already set actionError */
+    }
+  }
+
+  async function resetSeasonPoints() {
+    if (
+      !window.confirm(
+        "Clears every player’s stats and history, deletes EVERY saved fantasy team from Firebase, and sets the league to GW1. Custom-added players stay in the pool. Cannot be undone. Continue?",
+      )
+    ) {
+      return;
+    }
+    statsSavePendingRef.current = null;
+    try {
+      await runAction("Reset stats & remove teams", async () => {
+        await resetAllPlayerDocumentsStats();
+
+        const teamSnap = await getDocs(collection(db, "teams"));
+        const writeLimit = 450;
+        let batch = writeBatch(db);
+        let ops = 0;
+        const flush = async () => {
+          if (ops === 0) return;
+          await batch.commit();
+          batch = writeBatch(db);
+          ops = 0;
+        };
+
+        for (const d of teamSnap.docs) {
+          batch.delete(d.ref);
+          ops += 1;
+          if (ops >= writeLimit) await flush();
+        }
+
+        batch.set(doc(db, "gameState", "current"), { currentGameweek: 1 }, { merge: true });
+        ops += 1;
+        await flush();
       });
       setUnsavedStats(false);
       clearBuilder();
@@ -1453,6 +1733,9 @@ export default function Page() {
                 <h1 className="truncate text-2xl font-bold tracking-tight sm:text-3xl">{APP_NAME}</h1>
                 <p className="mt-0.5 text-xs font-medium uppercase tracking-[0.18em] text-zinc-500">
                   GW{currentGameweek} · Oxford &amp; Bletchingdon Nondescripts
+                </p>
+                <p className="mt-1 text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-600">
+                  Made by <span className="font-semibold text-red-400">Hashim</span>
                 </p>
               </div>
             </div>
@@ -1499,7 +1782,7 @@ export default function Page() {
               <section className="lg:col-span-7">
                 <Card>
                   <CardHeader title="Draft pool"
-                    subtitle={`Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — max ${money(BUDGET)}. WK button only on WK-listed players. 1st XI costs more than 2nd XI. Everyone sees the same player list — it updates live from Firestore when an admin changes the roster or saves stats.`}
+                    subtitle={`Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — max ${money(BUDGET)}. Σ pts = summed completed gameweeks (for picking form); GW = raw points this gameweek. Your leaderboard only banks weeks you owned a player.`}
                     right={
                       <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
                         <input type="checkbox" checked={onlyAvailable} onChange={(e) => setOnlyAvailable(e.target.checked)}
@@ -1530,18 +1813,47 @@ export default function Page() {
                     <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                       <TextField value={search} onChange={setSearch} placeholder="Search players…"
                         right={<Search className="h-4 w-4 text-zinc-500" />} />
-                      <label className="block">
-                        <div className="mb-1.5 text-xs font-medium text-zinc-300">Sort by</div>
-                        <select
-                          value={draftSort}
-                          onChange={(e) => setDraftSort(e.target.value as "price_desc" | "price_asc" | "name")}
-                          className="w-full rounded-xl bg-white/5 px-3 py-2.5 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-red-500/60"
-                        >
-                          <option value="price_desc">Price (high → low)</option>
-                          <option value="price_asc">Price (low → high)</option>
-                          <option value="name">Name (A–Z)</option>
-                        </select>
-                      </label>
+                      <div className="block sm:col-span-2 lg:col-span-1">
+                        <div className="mb-1.5 text-xs font-medium text-zinc-300">Sort pool</div>
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                          <select
+                            value={draftSortKey}
+                            onChange={(e) => setDraftSortKey(e.target.value as DraftSortKey)}
+                            className="min-w-0 flex-1 rounded-xl bg-white/5 px-3 py-2.5 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-red-500/60"
+                          >
+                            <optgroup label="Roster">
+                              <option value="id">Player ID</option>
+                              <option value="name">Name</option>
+                              <option value="role">Role</option>
+                              <option value="teamTier">Squad (1st / 2nd XI)</option>
+                              <option value="available">Listed available</option>
+                              <option value="price">Price</option>
+                              <option value="picked">Times picked (league)</option>
+                            </optgroup>
+                            <optgroup label="This gameweek stats">
+                              <option value="runs">Runs</option>
+                              <option value="wickets">Wickets</option>
+                              <option value="catches">Catches</option>
+                              <option value="wkCatches">WK catches</option>
+                              <option value="stumpings">Stumpings</option>
+                              <option value="runOuts">Run outs</option>
+                              <option value="gwPoints">GW fantasy points</option>
+                            </optgroup>
+                            <optgroup label="Season">
+                              <option value="seasonPts">Season Σ points</option>
+                            </optgroup>
+                          </select>
+                          <select
+                            value={draftSortDir}
+                            onChange={(e) => setDraftSortDir(e.target.value as "asc" | "desc")}
+                            className="w-full shrink-0 rounded-xl bg-white/5 px-3 py-2.5 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-red-500/60 sm:w-36"
+                            aria-label="Sort direction"
+                          >
+                            <option value="desc">High → low</option>
+                            <option value="asc">Low → high</option>
+                          </select>
+                        </div>
+                      </div>
                       <div className="rounded-xl bg-white/5 p-3 ring-1 ring-white/10 sm:col-span-2 lg:col-span-1">
                         <div className="text-xs font-medium text-zinc-300">Budget</div>
                         <div className="mt-2 flex items-baseline justify-between gap-3">
@@ -1604,7 +1916,11 @@ export default function Page() {
                                   <span className="text-zinc-600">•</span>
                                   <span>{p.catches} ct</span>
                                   <span className="text-zinc-600">•</span>
-                                  <span className="font-medium text-zinc-200">{calculatePoints(p)} pts</span>
+                                  <span className="font-medium text-emerald-200">
+                                    Σ {sumSeasonPointsFromHistory(p.history)} pts
+                                  </span>
+                                  <span className="text-zinc-600">•</span>
+                                  <span className="text-zinc-400">GW {calculatePoints(p)}</span>
                                 </div>
                                 <div className="mt-2 flex flex-wrap items-center gap-2">
                                   <Pill tone="amber">{ROLE_LABEL[p.role]}</Pill>
@@ -1764,6 +2080,12 @@ export default function Page() {
                               ) : null}
                             </span>
                           )}
+                          {currentGameweek > 1 ? (
+                            <span className="mt-2 block border-t border-white/10 pt-2 text-zinc-500">
+                              From GW2 onward, <strong className="text-zinc-300">new squads and any player you bring in</strong> only earn match points from{" "}
+                              <strong className="text-zinc-300">GW{currentGameweek + 1}</strong> — not this open week (stops picking loaded stat lines for a free hit).
+                            </span>
+                          ) : null}
                         </div>
                       ) : null}
 
@@ -1854,17 +2176,57 @@ export default function Page() {
               <Card>
                 <CardHeader
                   title="Player points"
-                  subtitle="Base fantasy points for each player (before captain or vice-captain multipliers)."
+                  subtitle="GW = stats entered for the current gameweek. Σ = sum across completed gameweeks (captain boosts apply only on your team leaderboard, not Σ)."
                 />
                 <CardBody>
-                  <div className="mb-4 text-xs text-zinc-400">
-                    <span className="font-semibold text-zinc-200">Scoring:</span>{" "}
-                    1 run = 1 point, 25/50/75/100 run bonuses = +5/+10/+15/+25, 1 wicket = 16 points, outfield catch = 8 points,{" "}
-                    wicketkeeping catch = 10, stumping = 12, run-out involvement = 10.
+                  <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                    <div className="text-xs text-zinc-400">
+                      <span className="font-semibold text-zinc-200">Scoring:</span>{" "}
+                      1 run = 1 point, 25/50/75/100 run bonuses = +5/+10/+15/+25, 1 wicket = 16 points, outfield catch = 8 points,{" "}
+                      wicketkeeping catch = 10, stumping = 12, run-out involvement = 10.
+                    </div>
+                    <div className="flex w-full shrink-0 flex-col gap-2 sm:max-w-md sm:flex-row">
+                      <select
+                        value={playersTabSortKey}
+                        onChange={(e) => setPlayersTabSortKey(e.target.value as DraftSortKey)}
+                        className="min-w-0 flex-1 rounded-xl bg-white/5 px-3 py-2 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-red-500/60"
+                        aria-label="Sort players table"
+                      >
+                        <optgroup label="Roster">
+                          <option value="id">Player ID</option>
+                          <option value="name">Name</option>
+                          <option value="role">Role</option>
+                          <option value="teamTier">Squad</option>
+                          <option value="price">Price</option>
+                          <option value="picked">Times picked</option>
+                        </optgroup>
+                        <optgroup label="This GW">
+                          <option value="runs">Runs</option>
+                          <option value="wickets">Wickets</option>
+                          <option value="catches">Catches</option>
+                          <option value="wkCatches">WK catches</option>
+                          <option value="stumpings">Stumpings</option>
+                          <option value="runOuts">Run outs</option>
+                          <option value="gwPoints">GW fantasy pts</option>
+                        </optgroup>
+                        <optgroup label="Season">
+                          <option value="seasonPts">Season Σ</option>
+                        </optgroup>
+                      </select>
+                      <select
+                        value={playersTabSortDir}
+                        onChange={(e) => setPlayersTabSortDir(e.target.value as "asc" | "desc")}
+                        className="w-full rounded-xl bg-white/5 px-3 py-2 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-red-500/60 sm:w-36"
+                        aria-label="Players table sort direction"
+                      >
+                        <option value="desc">High → low</option>
+                        <option value="asc">Low → high</option>
+                      </select>
+                    </div>
                   </div>
                   <div className="overflow-hidden rounded-2xl ring-1 ring-white/10">
                     <div className="overflow-x-auto bg-zinc-950/40">
-                      <table className="min-w-[980px] w-full border-collapse">
+                      <table className="min-w-[1060px] w-full border-collapse">
                         <thead className="bg-black/40 text-xs font-semibold text-zinc-300">
                           <tr>
                             <th className="px-4 py-3 text-left">Player</th>
@@ -1877,7 +2239,8 @@ export default function Page() {
                             <th className="px-4 py-3 text-right">WK c.</th>
                             <th className="px-4 py-3 text-right">Stumpings</th>
                             <th className="px-4 py-3 text-right">Run outs</th>
-                            <th className="px-4 py-3 text-right">Points</th>
+                            <th className="px-4 py-3 text-right">Σ pts</th>
+                            <th className="px-4 py-3 text-right">GW pts</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-white/10 text-sm text-zinc-100">
@@ -1893,6 +2256,9 @@ export default function Page() {
                               <td className="px-4 py-3 text-right text-zinc-200">{p.wkCatches}</td>
                               <td className="px-4 py-3 text-right text-zinc-200">{p.stumpings}</td>
                               <td className="px-4 py-3 text-right text-zinc-200">{p.runOuts}</td>
+                              <td className="px-4 py-3 text-right font-semibold text-emerald-200">
+                                {sumSeasonPointsFromHistory(p.history)}
+                              </td>
                               <td className="px-4 py-3 text-right font-bold text-white">{points}</td>
                             </tr>
                           ))}
@@ -1984,12 +2350,33 @@ export default function Page() {
                           className="rounded-2xl bg-white/5 px-4 py-3 text-sm font-bold text-zinc-200 ring-1 ring-white/10 hover:bg-white/10">
                           Deactivate all players
                         </button>
-                        <button type="button" onClick={() => void fullReset()}
-                          className="rounded-2xl bg-zinc-800 px-4 py-3 text-sm font-bold text-zinc-300 ring-1 ring-white/10 hover:bg-zinc-700 sm:col-span-2 lg:col-span-2">
-                          New season reset (GW1 — delete all teams, clear stats, remove added players)
-                        </button>
                       </div>
 
+                      <div className="mt-5 rounded-2xl bg-white/[0.03] p-4 ring-1 ring-white/10 sm:p-5">
+                        <div className="text-xs font-bold uppercase tracking-[0.2em] text-zinc-500">New season — points &amp; GW1</div>
+                        <p className="mt-2 text-sm text-zinc-400">
+                          <strong className="text-zinc-200">Keep squads:</strong> leaderboard and player stat sheet go to zero, GW1 — same lineups stay in Firebase.
+                          <span className="mx-1.5 text-zinc-600">·</span>
+                          <strong className="text-zinc-200">Delete teams:</strong> same as above but removes every saved squad (everyone must draft again).
+                        </p>
+                        <div className="mt-4 flex flex-col gap-3">
+                          <button type="button" onClick={() => void resetSeasonStatsKeepSquads()}
+                            className="w-full rounded-2xl bg-sky-700/50 px-4 py-4 text-left text-sm font-bold text-sky-50 ring-2 ring-sky-400/40 hover:bg-sky-600/45 sm:text-base">
+                            <span className="block">Recommended — all points to 0 &amp; GW1</span>
+                            <span className="mt-1 block text-xs font-semibold text-sky-200/90">Keeps every manager&apos;s team · clears stats only</span>
+                          </button>
+                          <button type="button" onClick={() => void resetSeasonPoints()}
+                            className="w-full rounded-2xl bg-zinc-900 px-4 py-3 text-left text-sm font-bold text-zinc-300 ring-1 ring-white/15 hover:bg-zinc-800">
+                            <span className="block">Hard reset — delete all saved teams</span>
+                            <span className="mt-1 block text-xs font-normal text-zinc-500">Player pool unchanged · everyone must save a new squad</span>
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-xs leading-relaxed text-zinc-400">
+                        After <strong className="text-zinc-200">End GW</strong>, each saved team keeps its running total (<strong className="text-zinc-200">Total</strong> on the leaderboard).
+                        Players&apos; editable stat rows go to zero for the new gameweek until match data is entered, so GW / base points display as{" "}
+                        <strong className="text-zinc-200">0</strong> until then.
+                      </p>
                       {/* Play Cricket import */}
                       <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4 sm:p-5">
                         <div className="text-base font-semibold text-white">Import from Play Cricket</div>
@@ -2219,7 +2606,8 @@ export default function Page() {
                                 <AdminStatsSortTh label="Runs" colKey="runs" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
                                 <AdminStatsSortTh label="Wkts" colKey="wickets" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
                                 <AdminStatsSortTh label="Catches" colKey="catches" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
-                                <AdminStatsSortTh label="Pts" colKey="points" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
+                                <AdminStatsSortTh label="GW" colKey="points" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
+                                <AdminStatsSortTh label="Σ" colKey="season" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
                                 <th className="px-4 py-3 text-zinc-400">Form</th>
                                 <th className="px-4 py-3" aria-label="Actions" />
                               </tr>
@@ -2276,6 +2664,9 @@ export default function Page() {
                                   </td>
                                   <td className="px-4 py-3">
                                     <span className="font-bold text-white">{calculatePoints(p)}</span>
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <span className="font-semibold text-emerald-200">{sumSeasonPointsFromHistory(p.history)}</span>
                                   </td>
                                   <td className="px-4 py-3">
                                     <FormDots history={p.history} />

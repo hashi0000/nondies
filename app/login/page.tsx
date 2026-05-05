@@ -309,7 +309,10 @@ export default function LoginPage() {
                     : "Sign in"}
                 </button>
 
-                <p className="text-center text-xs text-zinc-600">Powered by Firebase Auth</p>
+                <p className="text-center text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-600">
+                  Made by <span className="font-semibold text-red-400">Hashim</span>
+                </p>
+                <p className="mt-2 text-center text-xs text-zinc-600">Powered by Firebase Auth</p>
               </div>
             </div>
           </Card>

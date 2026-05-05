@@ -125,6 +125,9 @@ export default function RulesPage() {
               <p className="mt-1 text-sm font-medium uppercase tracking-[0.16em] text-zinc-500">
                 Nondies Fantasy League
               </p>
+              <p className="mt-2 text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-600">
+                Made by <span className="font-semibold text-red-400">Hashim</span>
+              </p>
             </div>
           </div>
 

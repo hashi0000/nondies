@@ -81,6 +81,14 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /userChatState/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create, update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.lastSeenAt is timestamp;
+      allow delete: if false;
+    }
+
     match /snapshots/{snapshotId} {
       allow read: if canManageLeague();
       allow create, update, delete: if canManageLeague();

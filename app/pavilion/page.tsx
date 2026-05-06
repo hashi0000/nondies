@@ -134,6 +134,7 @@ export default function PavilionPage() {
   const [lastSentAtMs, setLastSentAtMs] = useState(0);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const lastSeenWriteMsRef = useRef(0);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -211,6 +212,23 @@ export default function PavilionPage() {
       setChatMessages(next);
     });
   }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser || chatMessages.length === 0) return;
+    const newest = chatMessages[chatMessages.length - 1];
+    if (!newest?.createdAt) return;
+    const newestMs = newest.createdAt.toMillis();
+    if (newestMs <= lastSeenWriteMsRef.current) return;
+    lastSeenWriteMsRef.current = newestMs;
+    void setDoc(
+      doc(db, "userChatState", authUser.uid),
+      {
+        lastSeenAt: newest.createdAt,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    );
+  }, [authUser, chatMessages]);
 
   useEffect(() => {
     const el = listRef.current;

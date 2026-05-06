@@ -38,6 +38,7 @@ import {
   query,
   serverTimestamp,
   setDoc,
+  Timestamp,
   updateDoc,
   writeBatch,
 } from "firebase/firestore";
@@ -199,6 +200,11 @@ type DraftSortKey =
   | "gwPoints"
   | "seasonPts"
   | "picked";
+
+type LatestChatMeta = {
+  createdAt: Timestamp;
+  userId: string;
+};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -732,6 +738,8 @@ export default function Page() {
   const [builder, setBuilder] = useState<BuilderState>({ teamName: "", selected: [], captain: null, viceCaptain: null, keeper: null });
   const [ownerNameInput, setOwnerNameInput] = useState("");
   const [ownerNameTouched, setOwnerNameTouched] = useState(false);
+  const [latestChatMeta, setLatestChatMeta] = useState<LatestChatMeta | null>(null);
+  const [chatLastSeenAt, setChatLastSeenAt] = useState<Timestamp | null>(null);
 
   // Admin
   const [adminAuthed, setAdminAuthed] = useState(false);
@@ -920,6 +928,35 @@ export default function Page() {
     );
     return () => unsub();
   }, []);
+
+  useEffect(() => {
+    if (!authUser) return;
+    const q = query(collection(db, "chatMessages"), orderBy("createdAt", "desc"), limit(1));
+    return onSnapshot(q, (snap) => {
+      const d = snap.docs[0];
+      if (!d) {
+        setLatestChatMeta(null);
+        return;
+      }
+      const raw = d.data() as Record<string, unknown>;
+      const createdAt = raw.createdAt instanceof Timestamp ? raw.createdAt : null;
+      const userId = typeof raw.userId === "string" ? raw.userId : "";
+      if (!createdAt) {
+        setLatestChatMeta(null);
+        return;
+      }
+      setLatestChatMeta({ createdAt, userId });
+    });
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser) return;
+    return onSnapshot(doc(db, "userChatState", authUser.uid), (snap) => {
+      const raw = snap.data() as Record<string, unknown> | undefined;
+      const ts = raw?.lastSeenAt instanceof Timestamp ? raw.lastSeenAt : null;
+      setChatLastSeenAt(ts);
+    });
+  }, [authUser]);
 
   async function runAction<T>(label: string, fn: () => Promise<T>) {
     setActionError(null);
@@ -1177,6 +1214,12 @@ export default function Page() {
     rows.sort((a, b) => b.total - a.total || a.team.name.localeCompare(b.team.name));
     return rows;
   }, [teams, playersById, currentGameweek]);
+  const hasUnreadPavilion = useMemo(() => {
+    if (!authUser || !latestChatMeta) return false;
+    if (latestChatMeta.userId === authUser.uid) return false;
+    if (!chatLastSeenAt) return true;
+    return latestChatMeta.createdAt.toMillis() > chatLastSeenAt.toMillis();
+  }, [authUser, latestChatMeta, chatLastSeenAt]);
 
   const bestSquad = useMemo(() => generateBestSquad(players), [players]);
   const selectedCount = builder.selected.length;
@@ -1793,10 +1836,16 @@ export default function Page() {
               <span className="hidden xl:inline">Rules</span>
             </Link>
             <Link href="/pavilion"
-              className="hidden sm:inline-flex items-center justify-center gap-2 rounded-xl bg-white/5 px-3 py-2 text-sm font-medium text-zinc-300 ring-1 ring-white/10 hover:bg-white/10 hover:text-white transition"
+              className={[
+                "hidden sm:inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium ring-1 transition",
+                hasUnreadPavilion
+                  ? "bg-red-600/20 text-red-100 ring-red-500/40 hover:bg-red-600/30"
+                  : "bg-white/5 text-zinc-300 ring-white/10 hover:bg-white/10 hover:text-white",
+              ].join(" ")}
               title="Pavilion chat">
               <MessageSquare className="h-4 w-4" />
               <span className="hidden xl:inline">Pavilion</span>
+              {hasUnreadPavilion ? <span className="h-2 w-2 rounded-full bg-red-300" aria-label="Unread Pavilion messages" /> : null}
             </Link>
           </div>
         </header>
@@ -2822,9 +2871,15 @@ export default function Page() {
           <TabButton active={tab === "players"} onClick={() => setTab("players")} icon={<Users className="h-4 w-4" />} label="Players" />
           <TabButton active={tab === "admin"} onClick={() => setTab("admin")} icon={<Settings className="h-4 w-4" />} label="Admin" />
           <Link href="/pavilion"
-            className="inline-flex flex-1 items-center justify-center gap-1 rounded-xl bg-white/5 px-3 py-2 text-xs font-medium text-zinc-300 ring-1 ring-white/10 hover:bg-white/10 hover:text-white transition">
+            className={[
+              "inline-flex flex-1 items-center justify-center gap-1 rounded-xl px-3 py-2 text-xs font-medium ring-1 transition",
+              hasUnreadPavilion
+                ? "bg-red-600/20 text-red-100 ring-red-500/40 hover:bg-red-600/30"
+                : "bg-white/5 text-zinc-300 ring-white/10 hover:bg-white/10 hover:text-white",
+            ].join(" ")}>
             <MessageSquare className="h-4 w-4" />
             Pavilion
+            {hasUnreadPavilion ? <span className="h-2 w-2 rounded-full bg-red-300" aria-label="Unread Pavilion messages" /> : null}
           </Link>
         </div>
       </nav>

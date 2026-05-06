@@ -12,6 +12,32 @@ service cloud.firestore {
     function canManageLeague() {
       return isAdmin() || isLeagueAdmin();
     }
+    function isArray(v) {
+      return v is list;
+    }
+    function validChatCreate() {
+      return request.resource.data.userId == request.auth.uid
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() > 0
+        && request.resource.data.displayName.size() <= 80
+        && request.resource.data.message is string
+        && request.resource.data.message.size() > 0
+        && request.resource.data.message.size() <= 300
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.deleted == false
+        && isArray(request.resource.data.mentionedUserIds);
+    }
+    function validChatSoftDelete() {
+      return resource.data.deleted == false
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.displayName == resource.data.displayName
+        && request.resource.data.message == resource.data.message
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.mentionedUserIds == resource.data.mentionedUserIds
+        && request.resource.data.deleted == true
+        && request.resource.data.deletedAt is timestamp
+        && request.resource.data.deletedBy == request.auth.uid;
+    }
 
     // Marker collection — only Firebase Console / Admin SDK can create these docs
     match /leagueAdmins/{uid} {
@@ -35,6 +61,24 @@ service cloud.firestore {
     match /gameState/{docId} {
       allow read: if signedIn();
       allow create, update, delete: if canManageLeague();
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && uid == request.auth.uid
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() > 0
+        && request.resource.data.displayName.size() <= 80
+        && request.resource.data.displayNameLower is string
+        && request.resource.data.displayNameLower.size() > 0;
+      allow delete: if false;
+    }
+
+    match /chatMessages/{messageId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && validChatCreate();
+      allow update: if canManageLeague() && validChatSoftDelete();
+      allow delete: if false;
     }
 
     match /snapshots/{snapshotId} {

@@ -10,6 +10,7 @@ import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
   sendEmailVerification,
+  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signInWithPopup,
   updateProfile,
@@ -96,6 +97,7 @@ export default function LoginPage() {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resetNote, setResetNote] = useState<string | null>(null);
 
   const showNameField = mode === "email" && emailFlow === "signup";
 
@@ -128,6 +130,7 @@ export default function LoginPage() {
 
   async function handleEmail() {
     setError(null);
+    setResetNote(null);
     setBusy(true);
     try {
       if (emailFlow === "signup") {
@@ -141,6 +144,25 @@ export default function LoginPage() {
       router.replace("/");
     } catch (e: any) {
       setError(e?.message ?? "Email sign-in failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleForgotPassword() {
+    const trimmedEmail = email.trim();
+    if (!/\S+@\S+\.\S+/.test(trimmedEmail)) {
+      setResetNote("Enter your email first, then tap Forgot password.");
+      return;
+    }
+    setError(null);
+    setResetNote(null);
+    setBusy(true);
+    try {
+      await sendPasswordResetEmail(auth, trimmedEmail);
+      setResetNote("Password reset link sent. Check your inbox.");
+    } catch (e: any) {
+      setError(e?.message ?? "Could not send password reset email.");
     } finally {
       setBusy(false);
     }
@@ -273,6 +295,18 @@ export default function LoginPage() {
                       placeholder="min 6 characters"
                       type="password"
                     />
+                    {emailFlow === "signin" ? (
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => void handleForgotPassword()}
+                          disabled={busy}
+                          className="text-xs font-medium text-zinc-400 underline decoration-zinc-600 underline-offset-2 transition hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Forgot password?
+                        </button>
+                      </div>
+                    ) : null}
                   </>
                 ) : (
                   <div className="rounded-xl bg-white/4 px-4 py-3 text-sm text-zinc-400 ring-1 ring-white/8">
@@ -283,6 +317,11 @@ export default function LoginPage() {
                 {error ? (
                   <div className="rounded-xl bg-red-500/10 px-4 py-3 text-sm text-red-300 ring-1 ring-red-500/25">
                     {error}
+                  </div>
+                ) : null}
+                {resetNote ? (
+                  <div className="rounded-xl bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200 ring-1 ring-emerald-500/25">
+                    {resetNote}
                   </div>
                 ) : null}
 

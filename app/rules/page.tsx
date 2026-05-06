@@ -228,7 +228,7 @@ export default function RulesPage() {
                       Changes are meant to apply from the <strong className="text-white">following</strong> gameweek. If you transfer the captain out, pick a new captain.
                     </li>
                     <li>
-                      <strong className="text-white">Pre-season window:</strong> unlimited free changes until midday on the published season start date (league-defined).
+                      <strong className="text-white">GW1 pre-lock window:</strong> unlimited free changes until the first lock at <strong className="text-white">{LINEUP_LOCK_SUMMARY}</strong> (local time).
                     </li>
                     <li>
                       <strong className="text-white">Wildcard:</strong> once per season, one gameweek of unlimited free transfers (league-operated).
@@ -356,6 +356,12 @@ export default function RulesPage() {
               <SectionTitle icon={<Repeat className="h-5 w-5" />}>Transfers</SectionTitle>
               <Card>
                 <ul className="space-y-3 text-sm leading-relaxed text-zinc-300">
+                  <li className="flex gap-3">
+                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-red-500/80" aria-hidden />
+                    <span>
+                      <strong className="text-white">GW1 special:</strong> unlimited free changes up to the first weekly lock ({LINEUP_LOCK_SUMMARY} local time).
+                    </span>
+                  </li>
                   <li className="flex gap-3">
                     <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-red-500/80" aria-hidden />
                     <span>
@@ -560,7 +566,7 @@ export default function RulesPage() {
                       <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-3">Weekly timeline</div>
                       <ol className="relative border-l border-white/10 ml-2 grid gap-5">
                         {[
-                          { day: "Mon–Sat", text: "Select or update your squad. You can change it as many times as you like until the weekly lock." },
+                          { day: "Mon–Fri", text: "Select or update your squad. You can change it as many times as you like until the weekly lock." },
                           { day: LINEUP_LOCK_SUMMARY_SHORT, text: "Selection locks. No more changes until the admin ends the gameweek.", highlight: true },
                           { day: "Weekend", text: "The match is played. Real performances recorded by the club." },
                           { day: "Post-match", text: "Admin updates stats (manually or via Play Cricket match import). Points for the week are computed from those numbers." },

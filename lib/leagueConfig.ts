@@ -8,8 +8,8 @@ export const BUDGET = 64;
 
 /** Lineup lock in the user’s browser local time (`Date.getDay()` scale: 0 Sun … 6 Sat). */
 export const LINEUP_LOCK_WEEKDAY = 6;
-export const LINEUP_LOCK_HOUR = 10;
-export const LINEUP_LOCK_MINUTE = 30;
+export const LINEUP_LOCK_HOUR = 0;
+export const LINEUP_LOCK_MINUTE = 0;
 
 const LINEUP_LOCK_DAY_NAME = [
   "Sunday",
@@ -25,7 +25,7 @@ const LINEUP_LOCK_DAY_NAME = [
 export const LINEUP_LOCK_SUMMARY = `${LINEUP_LOCK_DAY_NAME[LINEUP_LOCK_WEEKDAY]} ${LINEUP_LOCK_HOUR}:${String(LINEUP_LOCK_MINUTE).padStart(2, "0")}`;
 
 /** Short label for compact UI, e.g. "Sat 10:30". */
-export const LINEUP_LOCK_SUMMARY_SHORT = `Sat ${LINEUP_LOCK_HOUR}:${String(LINEUP_LOCK_MINUTE).padStart(2, "0")}`;
+export const LINEUP_LOCK_SUMMARY_SHORT = `${LINEUP_LOCK_DAY_NAME[LINEUP_LOCK_WEEKDAY].slice(0, 3)} ${LINEUP_LOCK_HOUR}:${String(LINEUP_LOCK_MINUTE).padStart(2, "0")}`;
 
 export type PlayerRole = "bat" | "ar" | "bowl" | "wk";
 

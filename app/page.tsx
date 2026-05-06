@@ -18,6 +18,7 @@ import {
   Trophy,
   Download,
   ArrowUpDown,
+  MessageSquare,
   Users,
   X,
 } from "lucide-react";
@@ -442,6 +443,10 @@ function firstScoringGameweekForNewSigning(currentGameweek: number): number {
   return currentGameweek > 1 ? currentGameweek + 1 : 1;
 }
 
+function transferPenaltiesApplyInGameweek(currentGameweek: number): boolean {
+  return currentGameweek > 1;
+}
+
 function buildPlayerJoinedGameweekAfterSave(
   existing: SavedTeam | null,
   newPlayers: number[],
@@ -662,11 +667,11 @@ function savedTeamFromFirestoreDoc(d: { id: string; data: () => Record<string, u
 
 /** Leaderboard owner: always the account holder — live from Auth for your row; Firestore for everyone else. */
 function resolveOwnerDisplayName(team: SavedTeam, authUser: User | null): string {
+  const stored = ownerFieldFromFirestore(team.ownerName);
+  if (stored) return stored;
   if (authUser && team.uid === authUser.uid) {
     return accountHolderName(authUser);
   }
-  const stored = ownerFieldFromFirestore(team.ownerName);
-  if (stored) return stored;
   return "Unknown";
 }
 
@@ -725,6 +730,8 @@ export default function Page() {
 
   // Draft builder — in-memory (Firestore is source of truth for roster & teams)
   const [builder, setBuilder] = useState<BuilderState>({ teamName: "", selected: [], captain: null, viceCaptain: null, keeper: null });
+  const [ownerNameInput, setOwnerNameInput] = useState("");
+  const [ownerNameTouched, setOwnerNameTouched] = useState(false);
 
   // Admin
   const [adminAuthed, setAdminAuthed] = useState(false);
@@ -935,7 +942,7 @@ export default function Page() {
     return () => unsub();
   }, [router]);
 
-  // Sync ownerName + createdBy from Auth using getDoc (does not rely on teams[] mapping).
+  // Ensure createdBy is present; only backfill ownerName from Auth if document has none.
   useEffect(() => {
     if (!authUser) return;
     let cancelled = false;
@@ -945,12 +952,17 @@ export default function Page() {
         const snap = await getDoc(ref);
         if (cancelled || !snap.exists()) return;
         const data = snap.data();
-        const desired = accountHolderName(authUser);
         const cur = ownerFieldFromFirestore(data.ownerName);
-        const okOwner = cur === desired;
         const okBy = data.createdBy === authUser.uid;
-        if (okOwner && okBy) return;
-        await setDoc(ref, { ownerName: desired, createdBy: authUser.uid }, { merge: true });
+        if (cur && okBy) return;
+        await setDoc(
+          ref,
+          {
+            ownerName: cur ?? accountHolderName(authUser),
+            createdBy: authUser.uid,
+          },
+          { merge: true },
+        );
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         if (!cancelled) setActionError(`Could not update owner name: ${msg}`);
@@ -1127,10 +1139,17 @@ export default function Page() {
     [teams, authUser],
   );
 
+  useEffect(() => {
+    if (!authUser || ownerNameTouched) return;
+    const fromTeam = mySavedTeam ? ownerFieldFromFirestore(mySavedTeam.ownerName) : undefined;
+    setOwnerNameInput(fromTeam ?? accountHolderName(authUser));
+  }, [authUser, mySavedTeam, ownerNameTouched]);
+
   const transferSavePreview = useMemo(() => {
     if (builder.selected.length !== SQUAD_SIZE) return null;
+    const penaltiesApply = transferPenaltiesApplyInGameweek(currentGameweek);
     if (!mySavedTeam) {
-      return { kind: "first" as const };
+      return { kind: "first" as const, penaltiesApply };
     }
     const baseline =
       mySavedTeam.transferBaselinePlayers?.length === SQUAD_SIZE
@@ -1141,11 +1160,11 @@ export default function Page() {
         ? Math.max(0, Math.min(Math.floor(mySavedTeam.freeTransfersAtGwStart), MAX_FREE_TRANSFERS_IN_GW))
         : MAX_FREE_TRANSFERS_IN_GW;
     const T = countOutgoingPlayerChanges(baseline, builder.selected);
-    const extras = transferExtrasAgainstFree(T, F);
-    const penaltyDue = penaltyPointsForExtras(extras);
+    const extras = penaltiesApply ? transferExtrasAgainstFree(T, F) : 0;
+    const penaltyDue = penaltiesApply ? penaltyPointsForExtras(extras) : 0;
     const penaltyDelta = penaltyDue - (mySavedTeam.transferPenaltyPointsApplied ?? 0);
-    return { kind: "returning" as const, T, F, extras, penaltyDue, penaltyDelta };
-  }, [mySavedTeam, builder.selected]);
+    return { kind: "returning" as const, penaltiesApply, T, F, extras, penaltyDue, penaltyDelta };
+  }, [mySavedTeam, builder.selected, currentGameweek]);
 
   const leaderboard = useMemo(() => {
     const rows = teams.map((t) => ({
@@ -1241,8 +1260,9 @@ export default function Page() {
         }
 
         const T = countOutgoingPlayerChanges(baseline, newPlayers);
-        const extras = transferExtrasAgainstFree(T, freeAtGwStart);
-        const penaltyDue = penaltyPointsForExtras(extras);
+        const penaltiesApply = transferPenaltiesApplyInGameweek(currentGameweek);
+        const extras = penaltiesApply ? transferExtrasAgainstFree(T, freeAtGwStart) : 0;
+        const penaltyDue = penaltiesApply ? penaltyPointsForExtras(extras) : 0;
         const oldApplied = existing?.transferPenaltyPointsApplied ?? 0;
         const newCumulative = Math.round((prevCumulative - (penaltyDue - oldApplied)) * 10) / 10;
 
@@ -1250,7 +1270,7 @@ export default function Page() {
           ref,
           {
             name: builder.teamName.trim(),
-            ownerName: accountHolderName(authUser),
+            ownerName: ownerNameInput.trim() || accountHolderName(authUser),
             players: newPlayers,
             captain: builder.captain,
             viceCaptain: builder.viceCaptain,
@@ -1267,6 +1287,7 @@ export default function Page() {
         );
       });
       setBuilder((prev) => ({ ...prev, teamName: "" }));
+      setOwnerNameTouched(false);
       setTab("leaderboard");
     } finally {
       setSavingTeam(false);
@@ -1771,6 +1792,12 @@ export default function Page() {
               <span className="text-xs font-bold">?</span>
               <span className="hidden xl:inline">Rules</span>
             </Link>
+            <Link href="/pavilion"
+              className="hidden sm:inline-flex items-center justify-center gap-2 rounded-xl bg-white/5 px-3 py-2 text-sm font-medium text-zinc-300 ring-1 ring-white/10 hover:bg-white/10 hover:text-white transition"
+              title="Pavilion chat">
+              <MessageSquare className="h-4 w-4" />
+              <span className="hidden xl:inline">Pavilion</span>
+            </Link>
           </div>
         </header>
 
@@ -1960,6 +1987,15 @@ export default function Page() {
                   />
                   <CardBody>
                     <div className="grid gap-3">
+                      <TextField
+                        value={ownerNameInput}
+                        onChange={(v) => {
+                          setOwnerNameInput(v);
+                          setOwnerNameTouched(true);
+                        }}
+                        placeholder="Owner name shown on leaderboard"
+                        label="Owner name"
+                      />
                       <TextField value={builder.teamName} onChange={(v) => setBuilder((p) => ({ ...p, teamName: v }))}
                         placeholder="Team name (e.g., Captain's XI)" label="Team name" />
 
@@ -2054,6 +2090,10 @@ export default function Page() {
                           {transferSavePreview.kind === "first" ? (
                             <span>
                               First save: <strong className="text-zinc-200">no transfer charge</strong>. Your gameweek baseline becomes this squad.
+                            </span>
+                          ) : !transferSavePreview.penaltiesApply ? (
+                            <span>
+                              GW1 pre-lock window: <strong className="text-zinc-200">unlimited changes are free</strong> (no transfer deductions until GW2).
                             </span>
                           ) : transferSavePreview.extras === 0 ? (
                             <span>
@@ -2329,6 +2369,7 @@ export default function Page() {
 
                       <div className="rounded-xl bg-white/[0.04] px-4 py-3 text-xs leading-relaxed text-zinc-400 ring-1 ring-white/10">
                         <span className="font-semibold text-zinc-200">Transfer policy</span> (enforced on save; rollover on End GW):{" "}
+                        <strong className="text-zinc-300">GW1 pre-lock = unlimited free changes</strong>, then{" "}
                         <strong className="text-zinc-300">{FREE_TRANSFERS_PER_WEEK}</strong> free player change per gameweek, up to{" "}
                         <strong className="text-zinc-300">{MAX_BANKED_FREE_TRANSFERS}</strong> banked, max{" "}
                         <strong className="text-zinc-300">{MAX_FREE_TRANSFERS_IN_GW}</strong> free in hand, then{" "}
@@ -2780,6 +2821,11 @@ export default function Page() {
           <TabButton active={tab === "leaderboard"} onClick={() => setTab("leaderboard")} icon={<Trophy className="h-4 w-4" />} label="Leaderboard" />
           <TabButton active={tab === "players"} onClick={() => setTab("players")} icon={<Users className="h-4 w-4" />} label="Players" />
           <TabButton active={tab === "admin"} onClick={() => setTab("admin")} icon={<Settings className="h-4 w-4" />} label="Admin" />
+          <Link href="/pavilion"
+            className="inline-flex flex-1 items-center justify-center gap-1 rounded-xl bg-white/5 px-3 py-2 text-xs font-medium text-zinc-300 ring-1 ring-white/10 hover:bg-white/10 hover:text-white transition">
+            <MessageSquare className="h-4 w-4" />
+            Pavilion
+          </Link>
         </div>
       </nav>
     </div>

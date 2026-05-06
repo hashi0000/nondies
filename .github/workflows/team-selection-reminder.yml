@@ -1,0 +1,38 @@
+name: Team Selection Reminder
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Friday 18:00 UTC weekly. Adjust if needed for lock timezone.
+    - cron: "0 18 * * 5"
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Write Firebase service account
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON_B64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON_B64 }}
+        run: |
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT_JSON_B64" ]; then
+            echo "Missing secret: FIREBASE_SERVICE_ACCOUNT_JSON_B64"
+            exit 1
+          fi
+          echo "$FIREBASE_SERVICE_ACCOUNT_JSON_B64" | base64 --decode > /tmp/firebase-service-account.json
+
+      - name: Send reminders for users without complete team
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: /tmp/firebase-service-account.json
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          APP_URL: ${{ secrets.APP_URL }}
+          SEND_CONFIRM: "yes"
+        run: node tools/sendTeamSelectionReminder.mjs

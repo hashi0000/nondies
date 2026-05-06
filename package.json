@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "email:announce": "node tools/sendLeagueAnnouncement.mjs"
+    "email:announce": "node tools/sendLeagueAnnouncement.mjs",
+    "email:remind:pending": "node tools/sendTeamSelectionReminder.mjs"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",

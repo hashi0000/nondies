@@ -430,7 +430,7 @@ export default function RulesPage() {
               <div className="grid gap-3">
                 <Card>
                   <p className="text-xs text-zinc-500 mb-3">
-                    Scoring matches the app&apos;s calculator: run points plus a single run-milestone bonus, then wickets, outfield catches, and keeper-related bonuses.
+                    Scoring matches the app&apos;s calculator: run points plus boundary bonuses and a single run-milestone bonus, then wickets, outfield catches, and keeper-related bonuses.
                     The draft list role (batter vs bowler, etc.) is only for squad composition — if a batter takes wickets or a bowler scores runs in real life, you get those stats as entered.
                   </p>
                   <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-3">Batting &amp; bowling</div>
@@ -438,6 +438,8 @@ export default function RulesPage() {
                     headers={["Stat", "Points"]}
                     rows={[
                       ["1 run scored", <span key="r" className="font-bold text-white">+1 pt</span>],
+                      ["1 four hit", <span key="f4" className="font-bold text-white">+1 pt</span>],
+                      ["1 six hit", <span key="f6" className="font-bold text-white">+2 pts</span>],
                       ["1 wicket taken", <span key="w" className="font-bold text-white">+16 pts</span>],
                     ]}
                   />
@@ -445,14 +447,14 @@ export default function RulesPage() {
 
                 <Card>
                   <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-1">Run milestone bonuses</div>
-                  <p className="text-xs text-zinc-500 mb-3">Added on top of run points. <strong className="text-zinc-400">Only the highest milestone applies</strong> (same as the code: 100+ beats 75+ beats 50+, etc.).</p>
+                  <p className="text-xs text-zinc-500 mb-3">Added on top of run and boundary points. <strong className="text-zinc-400">Only the highest milestone applies</strong> (same as the code: 100+ beats 75+ beats 50+, etc.).</p>
                   <Table
                     headers={["Milestone", "Bonus", "Example"]}
                     rows={[
                       ["25+ runs",  <span key="a" className="font-bold text-white">+5 pts</span>,  ""],
-                      ["50+ runs",  <span key="b" className="font-bold text-white">+10 pts</span>, <span key="c" className="text-zinc-300">50 runs → 50 + 10 = <strong className="text-white">60 pts</strong> (before C/VC)</span>],
+                      ["50+ runs",  <span key="b" className="font-bold text-white">+10 pts</span>, <span key="c" className="text-zinc-300">50 runs with 4x4 and 1x6 → 50 + 4 + 2 + 10 = <strong className="text-white">66 pts</strong> (before C/VC)</span>],
                       ["75+ runs",  <span key="d" className="font-bold text-white">+15 pts</span>, ""],
-                      ["100+ runs", <span key="e" className="font-bold text-white">+25 pts</span>, <span key="f" className="text-zinc-300">100 runs → 100 + 25 = <strong className="text-white">125 pts</strong></span>],
+                      ["100+ runs", <span key="e" className="font-bold text-white">+25 pts</span>, <span key="f" className="text-zinc-300">100 runs with 8x4 and 2x6 → 100 + 8 + 4 + 25 = <strong className="text-white">137 pts</strong></span>],
                     ]}
                   />
                 </Card>
@@ -480,9 +482,9 @@ export default function RulesPage() {
                     {[
                       {
                         label: "Batter",
-                        stats: "64 runs, 1 catch",
-                        calc: "64 + 10 (50 bonus) + 8 (catch)",
-                        total: "82 pts",
+                        stats: "64 runs (7x4, 2x6), 1 catch",
+                        calc: "64 + 7 + 4 + 10 (50 bonus) + 8 (catch)",
+                        total: "93 pts",
                       },
                       {
                         label: "Bowler",
@@ -695,7 +697,7 @@ export default function RulesPage() {
                   },
                   {
                     title: "Captain the batter, not the bowler",
-                    body: "A century is 125 base pts before multipliers — doubled as captain that is huge. Three wickets is 48 base pts × 2 = 96. Batsmen often win the armband race.",
+                    body: "Big batting scores now add boundary bonuses too, so high-ceiling batters can still outscore bowlers with the armband. Three wickets remains a strong 48 base points before multipliers.",
                   },
                   {
                     title: "Watch ownership",

@@ -7,6 +7,8 @@ export function clampNonNegativeInt(n: number) {
 
 export type FantasyStatLine = {
   runs: number;
+  fours?: number;
+  sixes?: number;
   wickets: number;
   catches: number;
   wkCatches: number;
@@ -16,6 +18,8 @@ export type FantasyStatLine = {
 
 export function calculatePoints(p: FantasyStatLine) {
   const runs = clampNonNegativeInt(p.runs);
+  const fours = clampNonNegativeInt(p.fours ?? 0);
+  const sixes = clampNonNegativeInt(p.sixes ?? 0);
   let runBonus = 0;
   if (runs >= 100) runBonus = 25;
   else if (runs >= 75) runBonus = 15;
@@ -29,7 +33,8 @@ export function calculatePoints(p: FantasyStatLine) {
   const runOuts = clampNonNegativeInt(p.runOuts);
   const outfieldCatches = Math.max(totalCatches - wkC, 0);
 
-  const batting = runs + runBonus;
+  const boundaryBonus = fours + sixes * 2;
+  const batting = runs + runBonus + boundaryBonus;
   const bowling = wickets * 16;
   const fielding = outfieldCatches * 8;
 

@@ -2,6 +2,8 @@ import { normalizePlayCricketName } from "./names";
 
 export type AggregatedRow = {
   runs: number;
+  fours: number;
+  sixes: number;
   wickets: number;
   catches: number;
   wkCatches: number;
@@ -10,7 +12,7 @@ export type AggregatedRow = {
 };
 
 function emptyRow(): AggregatedRow {
-  return { runs: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0 };
+  return { runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0 };
 }
 
 function getRow(map: Map<string, AggregatedRow>, displayName: string): AggregatedRow | null {
@@ -73,7 +75,11 @@ function addBatRow(map: Map<string, AggregatedRow>, row: Record<string, unknown>
   if (!batsman) return;
 
   const br = getRow(map, batsman);
-  if (br) br.runs += Math.max(0, Math.floor(num(row.runs)));
+  if (br) {
+    br.runs += Math.max(0, Math.floor(num(row.runs)));
+    br.fours += Math.max(0, Math.floor(num(row.fours)));
+    br.sixes += Math.max(0, Math.floor(num(row.sixes)));
+  }
 
   const howOut = String(row.how_out ?? "");
   const fielderRaw = String(row.fielder_name ?? "").trim();

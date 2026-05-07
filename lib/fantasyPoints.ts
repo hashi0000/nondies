@@ -10,6 +10,7 @@ export type FantasyStatLine = {
   fours?: number;
   sixes?: number;
   wickets: number;
+  maidens?: number;
   catches: number;
   wkCatches: number;
   stumpings: number;
@@ -27,15 +28,26 @@ export function calculatePoints(p: FantasyStatLine) {
   else if (runs >= 25) runBonus = 5;
 
   const wickets = clampNonNegativeInt(p.wickets);
+  const maidens = clampNonNegativeInt(p.maidens ?? 0);
   const totalCatches = clampNonNegativeInt(p.catches);
   const wkC = clampNonNegativeInt(p.wkCatches);
   const stumpings = clampNonNegativeInt(p.stumpings);
   const runOuts = clampNonNegativeInt(p.runOuts);
   const outfieldCatches = Math.max(totalCatches - wkC, 0);
 
+  let wicketBonus = 0;
+  if (wickets >= 10) wicketBonus = 80;
+  else if (wickets >= 9) wicketBonus = 68;
+  else if (wickets >= 8) wicketBonus = 57;
+  else if (wickets >= 7) wicketBonus = 46;
+  else if (wickets >= 6) wicketBonus = 35;
+  else if (wickets >= 5) wicketBonus = 25;
+  else if (wickets >= 4) wicketBonus = 16;
+  else if (wickets >= 3) wicketBonus = 8;
+
   const boundaryBonus = fours + sixes * 2;
   const batting = runs + runBonus + boundaryBonus;
-  const bowling = wickets * 16;
+  const bowling = wickets * 16 + maidens * 6 + wicketBonus;
   const fielding = outfieldCatches * 8;
 
   const keeperBonuses = wkC * 10 + stumpings * 12 + runOuts * 10;

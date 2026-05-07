@@ -5,6 +5,7 @@ export type AggregatedRow = {
   fours: number;
   sixes: number;
   wickets: number;
+  maidens: number;
   catches: number;
   wkCatches: number;
   stumpings: number;
@@ -12,7 +13,7 @@ export type AggregatedRow = {
 };
 
 function emptyRow(): AggregatedRow {
-  return { runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0 };
+  return { runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0 };
 }
 
 function getRow(map: Map<string, AggregatedRow>, displayName: string): AggregatedRow | null {
@@ -105,9 +106,13 @@ function addBowlRow(map: Map<string, AggregatedRow>, row: Record<string, unknown
   const bowler = String(row.bowler_name ?? "").trim();
   if (!bowler) return;
   const w = Math.max(0, Math.floor(num(row.wickets)));
-  if (w === 0) return;
+  const m = Math.max(0, Math.floor(num(row.maidens ?? row.maiden_overs ?? row.maidens_overs)));
+  if (w === 0 && m === 0) return;
   const br = getRow(map, bowler);
-  if (br) br.wickets += w;
+  if (br) {
+    br.wickets += w;
+    br.maidens += m;
+  }
 }
 
 function asObjArray(v: unknown): Record<string, unknown>[] {

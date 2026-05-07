@@ -85,6 +85,7 @@ async function resetAllPlayerDocumentsStats() {
       fours: 0,
       sixes: 0,
       wickets: 0,
+      maidens: 0,
       catches: 0,
       wkCatches: 0,
       stumpings: 0,
@@ -105,6 +106,7 @@ type WeekRecord = {
   fours: number;
   sixes: number;
   wickets: number;
+  maidens: number;
   catches: number;
   wkCatches: number;
   stumpings: number;
@@ -127,6 +129,7 @@ type Player = {
   fours: number;
   sixes: number;
   wickets: number;
+  maidens: number;
   catches: number;
   wkCatches: number;
   stumpings: number;
@@ -187,6 +190,7 @@ type AdminStatsSortKey =
   | "fours"
   | "sixes"
   | "wickets"
+  | "maidens"
   | "catches"
   | "points"
   | "season";
@@ -203,6 +207,7 @@ type DraftSortKey =
   | "fours"
   | "sixes"
   | "wickets"
+  | "maidens"
   | "catches"
   | "wkCatches"
   | "stumpings"
@@ -238,41 +243,41 @@ const SEED_ROLE: Record<number, PlayerRole> = {
  * Cheapest seven 1st-XI picks still exceed BUDGET, so an all–1st-XI squad is impossible within cap.
  */
 const SEEDED_PLAYERS: Player[] = [
-  { id: 1,  name: "Arfan Ahmed",             role: SEED_ROLE[1],  teamTier: 1, price: 18, runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 2,  name: "Kamran Ahmed",            role: SEED_ROLE[2],  teamTier: 1, price: 16, runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 3,  name: "Hetu Hirpara",            role: SEED_ROLE[3],  teamTier: 1, price: 16, runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 4,  name: "Danial Khan",             role: SEED_ROLE[4],  teamTier: 1, price: 16, runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 5,  name: "Nabeel Khan",             role: SEED_ROLE[5],  teamTier: 1, price: 15, runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 6,  name: "Sayyid Hashim Ali Shah",  role: SEED_ROLE[6],  teamTier: 1, price: 15, runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 7,  name: "Bharadwaj Tanikella",     role: SEED_ROLE[7],  teamTier: 1, price: 15, runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 8,  name: "Sarim Zafar",             role: SEED_ROLE[8],  teamTier: 1, price: 14, runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 9,  name: "Pablo Mukherjee",         role: SEED_ROLE[9],  teamTier: 1, price: 17, runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 10, name: "Aizaz Khan",              role: SEED_ROLE[10], teamTier: 1, price: 15, runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 11, name: "Mohammad Awais Abid",     role: SEED_ROLE[11], teamTier: 1, price: 14, runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 12, name: "Sulayman Warraich",       role: SEED_ROLE[12], teamTier: 1, price: 14, runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 13, name: "Hadi Ali",                role: SEED_ROLE[13], teamTier: 1, price: 13, runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 14, name: "Ismaeil Saghir",          role: SEED_ROLE[14], teamTier: 1, price: 15, runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 15, name: "Joseph Asplet",           role: SEED_ROLE[15], teamTier: 1, price: 13, runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 16, name: "Gareth Spackman",         role: SEED_ROLE[16], teamTier: 1, price: 13, runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 17, name: "Nicholas Smith",          role: SEED_ROLE[17], teamTier: 1, price: 12, runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 18, name: "Ross Brown",              role: SEED_ROLE[18], teamTier: 1, price: 12, runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 19, name: "William Goodfellow",      role: SEED_ROLE[19], teamTier: 2, price: 6,  runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 20, name: "Zain Raja",               role: SEED_ROLE[20], teamTier: 2, price: 6,  runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 21, name: "Nayyer Ahmed",            role: SEED_ROLE[21], teamTier: 2, price: 6,  runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 22, name: "Haris Malak",             role: SEED_ROLE[22], teamTier: 2, price: 6,  runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 23, name: "Rameez Ali",              role: SEED_ROLE[23], teamTier: 2, price: 5,  runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 24, name: "Ayaz Khan",               role: SEED_ROLE[24], teamTier: 2, price: 5,  runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 25, name: "Asif Shah",               role: SEED_ROLE[25], teamTier: 2, price: 5,  runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 26, name: "Adnaan Rahman",           role: SEED_ROLE[26], teamTier: 2, price: 5,  runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 27, name: "A Sidhu",                 role: SEED_ROLE[27], teamTier: 2, price: 8,  runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 28, name: "Abdullah Akhlaq",         role: SEED_ROLE[28], teamTier: 2, price: 6,  runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 29, name: "Alexander Dellar",        role: SEED_ROLE[29], teamTier: 2, price: 5,  runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 30, name: "Atif Mohammed",           role: SEED_ROLE[30], teamTier: 2, price: 6,  runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 31, name: "Gaurav Samuel",           role: SEED_ROLE[31], teamTier: 2, price: 6,  runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 32, name: "Ibraheem Mirza",          role: SEED_ROLE[32], teamTier: 2, price: 6,  runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 33, name: "Muhammed Anas Awais",     role: SEED_ROLE[33], teamTier: 2, price: 5,  runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 34, name: "Shabaaz Alam",            role: SEED_ROLE[34], teamTier: 2, price: 7,  runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
-  { id: 35, name: "Sulaiman Hussain",        role: SEED_ROLE[35], teamTier: 2, price: 6,  runs: 0, fours: 0, sixes: 0, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 1,  name: "Arfan Ahmed",             role: SEED_ROLE[1],  teamTier: 1, price: 18, runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 2,  name: "Kamran Ahmed",            role: SEED_ROLE[2],  teamTier: 1, price: 16, runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 3,  name: "Hetu Hirpara",            role: SEED_ROLE[3],  teamTier: 1, price: 16, runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 4,  name: "Danial Khan",             role: SEED_ROLE[4],  teamTier: 1, price: 16, runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 5,  name: "Nabeel Khan",             role: SEED_ROLE[5],  teamTier: 1, price: 15, runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 6,  name: "Sayyid Hashim Ali Shah",  role: SEED_ROLE[6],  teamTier: 1, price: 15, runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 7,  name: "Bharadwaj Tanikella",     role: SEED_ROLE[7],  teamTier: 1, price: 15, runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 8,  name: "Sarim Zafar",             role: SEED_ROLE[8],  teamTier: 1, price: 14, runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 9,  name: "Pablo Mukherjee",         role: SEED_ROLE[9],  teamTier: 1, price: 17, runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 10, name: "Aizaz Khan",              role: SEED_ROLE[10], teamTier: 1, price: 15, runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 11, name: "Mohammad Awais Abid",     role: SEED_ROLE[11], teamTier: 1, price: 14, runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 12, name: "Sulayman Warraich",       role: SEED_ROLE[12], teamTier: 1, price: 14, runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 13, name: "Hadi Ali",                role: SEED_ROLE[13], teamTier: 1, price: 13, runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 14, name: "Ismaeil Saghir",          role: SEED_ROLE[14], teamTier: 1, price: 15, runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 15, name: "Joseph Asplet",           role: SEED_ROLE[15], teamTier: 1, price: 13, runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 16, name: "Gareth Spackman",         role: SEED_ROLE[16], teamTier: 1, price: 13, runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 17, name: "Nicholas Smith",          role: SEED_ROLE[17], teamTier: 1, price: 12, runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 18, name: "Ross Brown",              role: SEED_ROLE[18], teamTier: 1, price: 12, runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 19, name: "William Goodfellow",      role: SEED_ROLE[19], teamTier: 2, price: 6,  runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 20, name: "Zain Raja",               role: SEED_ROLE[20], teamTier: 2, price: 6,  runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 21, name: "Nayyer Ahmed",            role: SEED_ROLE[21], teamTier: 2, price: 6,  runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 22, name: "Haris Malak",             role: SEED_ROLE[22], teamTier: 2, price: 6,  runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 23, name: "Rameez Ali",              role: SEED_ROLE[23], teamTier: 2, price: 5,  runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 24, name: "Ayaz Khan",               role: SEED_ROLE[24], teamTier: 2, price: 5,  runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 25, name: "Asif Shah",               role: SEED_ROLE[25], teamTier: 2, price: 5,  runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 26, name: "Adnaan Rahman",           role: SEED_ROLE[26], teamTier: 2, price: 5,  runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 27, name: "A Sidhu",                 role: SEED_ROLE[27], teamTier: 2, price: 8,  runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 28, name: "Abdullah Akhlaq",         role: SEED_ROLE[28], teamTier: 2, price: 6,  runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 29, name: "Alexander Dellar",        role: SEED_ROLE[29], teamTier: 2, price: 5,  runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 30, name: "Atif Mohammed",           role: SEED_ROLE[30], teamTier: 2, price: 6,  runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 31, name: "Gaurav Samuel",           role: SEED_ROLE[31], teamTier: 2, price: 6,  runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 32, name: "Ibraheem Mirza",          role: SEED_ROLE[32], teamTier: 2, price: 6,  runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 33, name: "Muhammed Anas Awais",     role: SEED_ROLE[33], teamTier: 2, price: 5,  runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 34, name: "Shabaaz Alam",            role: SEED_ROLE[34], teamTier: 2, price: 7,  runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
+  { id: 35, name: "Sulaiman Hussain",        role: SEED_ROLE[35], teamTier: 2, price: 6,  runs: 0, fours: 0, sixes: 0, wickets: 0, maidens: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0, available: true, history: [] },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -369,6 +374,7 @@ function firestorePlayerMatchesAdminSnapshot(fs: Player, committed: Player): boo
     fs.fours === committed.fours &&
     fs.sixes === committed.sixes &&
     fs.wickets === committed.wickets &&
+    fs.maidens === committed.maidens &&
     fs.catches === committed.catches &&
     fs.wkCatches === committed.wkCatches &&
     fs.stumpings === committed.stumpings &&
@@ -416,6 +422,9 @@ function compareDraftPoolPlayers(
       break;
     case "wickets":
       cmp = a.wickets - b.wickets;
+      break;
+    case "maidens":
+      cmp = a.maidens - b.maidens;
       break;
     case "catches":
       cmp = a.catches - b.catches;
@@ -864,6 +873,7 @@ export default function Page() {
             fours: Number(data.fours ?? 0),
             sixes: Number(data.sixes ?? 0),
             wickets: Number(data.wickets ?? 0),
+            maidens: Number(data.maidens ?? 0),
             catches: Number(data.catches ?? 0),
             wkCatches: Number(data.wkCatches ?? 0),
             stumpings: Number(data.stumpings ?? 0),
@@ -899,6 +909,7 @@ export default function Page() {
                 fours: p.fours,
                 sixes: p.sixes,
                 wickets: p.wickets,
+                maidens: p.maidens,
                 catches: p.catches,
                 wkCatches: p.wkCatches,
                 stumpings: p.stumpings,
@@ -1170,6 +1181,9 @@ export default function Page() {
         case "wickets":
           cmp = a.wickets - b.wickets;
           break;
+        case "maidens":
+          cmp = a.maidens - b.maidens;
+          break;
         case "catches":
           cmp = a.catches - b.catches;
           break;
@@ -1395,6 +1409,7 @@ export default function Page() {
             fours: number;
             sixes: number;
             wickets: number;
+            maidens: number;
             catches: number;
             wkCatches: number;
             stumpings: number;
@@ -1417,6 +1432,7 @@ export default function Page() {
             fours: stats.fours,
             sixes: stats.sixes,
             wickets: stats.wickets,
+            maidens: stats.maidens,
             catches: stats.catches,
             wkCatches: stats.wkCatches,
             stumpings: stats.stumpings,
@@ -1457,6 +1473,7 @@ export default function Page() {
             fours: p.fours,
             sixes: p.sixes,
             wickets: p.wickets,
+            maidens: p.maidens,
             catches: p.catches,
             wkCatches: p.wkCatches,
             stumpings: p.stumpings,
@@ -1479,6 +1496,7 @@ export default function Page() {
               fours: p.fours,
               sixes: p.sixes,
               wickets: p.wickets,
+              maidens: p.maidens,
               catches: p.catches,
               wkCatches: p.wkCatches,
               stumpings: p.stumpings,
@@ -1538,6 +1556,7 @@ export default function Page() {
               fours: clampNonNegativeInt(Number(raw?.fours ?? 0)),
               sixes: clampNonNegativeInt(Number(raw?.sixes ?? 0)),
               wickets: clampNonNegativeInt(Number(raw?.wickets ?? 0)),
+              maidens: clampNonNegativeInt(Number(raw?.maidens ?? 0)),
               catches: clampNonNegativeInt(Number(raw?.catches ?? 0)),
               wkCatches: clampNonNegativeInt(Number(raw?.wkCatches ?? 0)),
               stumpings: clampNonNegativeInt(Number(raw?.stumpings ?? 0)),
@@ -1572,6 +1591,7 @@ export default function Page() {
       fours: 0,
       sixes: 0,
       wickets: 0,
+      maidens: 0,
       catches: 0,
       wkCatches: 0,
       stumpings: 0,
@@ -1594,6 +1614,7 @@ export default function Page() {
         fours: 0,
         sixes: 0,
         wickets: 0,
+        maidens: 0,
         catches: 0,
         wkCatches: 0,
         stumpings: 0,
@@ -1651,6 +1672,7 @@ export default function Page() {
           fours: p.fours,
           sixes: p.sixes,
           wickets: p.wickets,
+          maidens: p.maidens,
           catches: p.catches,
           wkCatches: p.wkCatches,
           stumpings: p.stumpings,
@@ -1662,6 +1684,7 @@ export default function Page() {
       fours: 0,
       sixes: 0,
       wickets: 0,
+      maidens: 0,
       catches: 0,
       wkCatches: 0,
       stumpings: 0,
@@ -1695,6 +1718,7 @@ export default function Page() {
             fours: p.fours,
             sixes: p.sixes,
             wickets: p.wickets,
+            maidens: p.maidens,
             catches: p.catches,
             wkCatches: p.wkCatches,
             stumpings: p.stumpings,
@@ -1897,7 +1921,7 @@ export default function Page() {
           {/* ── Draft tab ── */}
           {tab === "draft" ? (
             <>
-              <section className="lg:col-span-7">
+              <section className="order-2 lg:order-1 lg:col-span-7">
                 <Card>
                   <CardHeader title="Draft pool"
                     subtitle={`Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — max ${money(BUDGET)}. Σ pts = summed completed gameweeks (for picking form); GW = raw points this gameweek. Your leaderboard only banks weeks you owned a player.`}
@@ -1950,7 +1974,10 @@ export default function Page() {
                             </optgroup>
                             <optgroup label="This gameweek stats">
                               <option value="runs">Runs</option>
+                              <option value="fours">Fours</option>
+                              <option value="sixes">Sixes</option>
                               <option value="wickets">Wickets</option>
+                              <option value="maidens">Maidens</option>
                               <option value="catches">Catches</option>
                               <option value="wkCatches">WK catches</option>
                               <option value="stumpings">Stumpings</option>
@@ -2031,6 +2058,8 @@ export default function Page() {
                                   <span>{p.runs} runs</span>
                                   <span className="text-zinc-600">•</span>
                                   <span>{p.wickets} wkts</span>
+                                  <span className="text-zinc-600">�</span>
+                                  <span>{p.maidens} maid</span>
                                   <span className="text-zinc-600">•</span>
                                   <span>{p.catches} ct</span>
                                   <span className="text-zinc-600">•</span>
@@ -2066,7 +2095,7 @@ export default function Page() {
                 </Card>
               </section>
 
-              <section className="lg:col-span-5">
+              <section className="order-1 lg:order-2 lg:col-span-5">
                 <Card>
                   <CardHeader title={`Your squad (${SQUAD_SIZE})`} subtitle={`Shape ${SQUAD_ROLES.bat}-${SQUAD_ROLES.ar}-${SQUAD_ROLES.bowl}-${SQUAD_ROLES.wk} (bat–AR–bowl–WK), then assign C, VC, and WK (WK only on the WK player).`}
                     right={
@@ -2313,8 +2342,7 @@ export default function Page() {
                   <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                     <div className="text-xs text-zinc-400">
                       <span className="font-semibold text-zinc-200">Scoring:</span>{" "}
-                      1 run = 1 point, 25/50/75/100 run bonuses = +5/+10/+15/+25, 1 wicket = 16 points, outfield catch = 8 points,{" "}
-                      wicketkeeping catch = 10, stumping = 12, run-out involvement = 10.
+                      1 run = 1 point, 4 = +1, 6 = +2, 25/50/75/100 run bonuses = +5/+10/+15/+25, 1 wicket = 16 points, maiden = +6, wicket-haul bonuses from 3 wickets (+8) up to 10 wickets (+80), outfield catch = 8 points, wicketkeeping catch = 10, stumping = 12, run-out involvement = 10.
                     </div>
                     <div className="flex w-full shrink-0 flex-col gap-2 sm:max-w-md sm:flex-row">
                       <select
@@ -2336,6 +2364,7 @@ export default function Page() {
                           <option value="fours">Fours</option>
                           <option value="sixes">Sixes</option>
                           <option value="wickets">Wickets</option>
+                          <option value="maidens">Maidens</option>
                           <option value="catches">Catches</option>
                           <option value="wkCatches">WK catches</option>
                           <option value="stumpings">Stumpings</option>
@@ -2370,6 +2399,7 @@ export default function Page() {
                             <th className="px-4 py-3 text-right">4s</th>
                             <th className="px-4 py-3 text-right">6s</th>
                             <th className="px-4 py-3 text-right">Wkts</th>
+                            <th className="px-4 py-3 text-right">Maid</th>
                             <th className="px-4 py-3 text-right">Catches</th>
                             <th className="px-4 py-3 text-right">WK c.</th>
                             <th className="px-4 py-3 text-right">Stumpings</th>
@@ -2389,6 +2419,7 @@ export default function Page() {
                               <td className="px-4 py-3 text-right text-zinc-200">{p.fours}</td>
                               <td className="px-4 py-3 text-right text-zinc-200">{p.sixes}</td>
                               <td className="px-4 py-3 text-right text-zinc-200">{p.wickets}</td>
+                              <td className="px-4 py-3 text-right text-zinc-200">{p.maidens}</td>
                               <td className="px-4 py-3 text-right text-zinc-200">{p.catches}</td>
                               <td className="px-4 py-3 text-right text-zinc-200">{p.wkCatches}</td>
                               <td className="px-4 py-3 text-right text-zinc-200">{p.stumpings}</td>
@@ -2745,6 +2776,7 @@ export default function Page() {
                                 <th className="px-4 py-3 text-zinc-400">4s</th>
                                 <th className="px-4 py-3 text-zinc-400">6s</th>
                                 <AdminStatsSortTh label="Wkts" colKey="wickets" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
+                                <AdminStatsSortTh label="Maid" colKey="maidens" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
                                 <AdminStatsSortTh label="Catches" colKey="catches" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
                                 <AdminStatsSortTh label="GW" colKey="points" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
                                 <AdminStatsSortTh label="Σ" colKey="season" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
@@ -2804,6 +2836,9 @@ export default function Page() {
                                   </td>
                                   <td className="px-4 py-3 w-24">
                                     <NumberInput value={p.wickets} onChange={(v) => editLocalPlayer(p.id, { wickets: v })} />
+                                  </td>
+                                  <td className="px-4 py-3 w-24">
+                                    <NumberInput value={p.maidens} onChange={(v) => editLocalPlayer(p.id, { maidens: v })} />
                                   </td>
                                   <td className="px-4 py-3 w-24">
                                     <NumberInput value={p.catches} onChange={(v) => editLocalPlayer(p.id, { catches: v })} />

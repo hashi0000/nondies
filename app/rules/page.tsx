@@ -430,7 +430,7 @@ export default function RulesPage() {
               <div className="grid gap-3">
                 <Card>
                   <p className="text-xs text-zinc-500 mb-3">
-                    Scoring matches the app&apos;s calculator: run points plus boundary bonuses and a single run-milestone bonus, then wickets, outfield catches, and keeper-related bonuses.
+                    Scoring matches the app&apos;s calculator: run points plus boundary bonuses and a single run-milestone bonus, then bowling points (wickets, maidens, wicket-haul bonus), outfield catches, and keeper-related bonuses.
                     The draft list role (batter vs bowler, etc.) is only for squad composition — if a batter takes wickets or a bowler scores runs in real life, you get those stats as entered.
                   </p>
                   <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-3">Batting &amp; bowling</div>
@@ -441,6 +441,25 @@ export default function RulesPage() {
                       ["1 four hit", <span key="f4" className="font-bold text-white">+1 pt</span>],
                       ["1 six hit", <span key="f6" className="font-bold text-white">+2 pts</span>],
                       ["1 wicket taken", <span key="w" className="font-bold text-white">+16 pts</span>],
+                      ["1 maiden over", <span key="m" className="font-bold text-white">+6 pts</span>],
+                    ]}
+                  />
+                </Card>
+
+                <Card>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-1">Wicket-haul bonuses</div>
+                  <p className="text-xs text-zinc-500 mb-3">Added on top of wicket and maiden points. <strong className="text-zinc-400">Only the highest wicket milestone applies</strong>.</p>
+                  <Table
+                    headers={["Milestone", "Bonus", "Example"]}
+                    rows={[
+                      ["3+ wickets", <span key="wb3" className="font-bold text-white">+8 pts</span>, ""],
+                      ["4+ wickets", <span key="wb4" className="font-bold text-white">+16 pts</span>, <span key="wb4e" className="text-zinc-300">4 wickets, 1 maiden → 64 + 6 + 16 = <strong className="text-white">86 pts</strong></span>],
+                      ["5+ wickets", <span key="wb5" className="font-bold text-white">+25 pts</span>, <span key="wb5e" className="text-zinc-300">5 wickets, 2 maidens → 80 + 12 + 25 = <strong className="text-white">117 pts</strong></span>],
+                      ["6+ wickets", <span key="wb6" className="font-bold text-white">+35 pts</span>, ""],
+                      ["7+ wickets", <span key="wb7" className="font-bold text-white">+46 pts</span>, ""],
+                      ["8+ wickets", <span key="wb8" className="font-bold text-white">+57 pts</span>, ""],
+                      ["9+ wickets", <span key="wb9" className="font-bold text-white">+68 pts</span>, <span key="wb9e" className="text-zinc-300">9 wickets, 3 maidens → 144 + 18 + 68 = <strong className="text-white">230 pts</strong></span>],
+                      ["10 wickets", <span key="wb10" className="font-bold text-white">+80 pts</span>, ""],
                     ]}
                   />
                 </Card>
@@ -488,9 +507,9 @@ export default function RulesPage() {
                       },
                       {
                         label: "Bowler",
-                        stats: "3 wickets, 0 runs",
-                        calc: "3 × 16",
-                        total: "48 pts",
+                        stats: "4 wickets, 2 maidens, 0 runs",
+                        calc: "4 × 16 + 2 × 6 + 16 (4w bonus)",
+                        total: "92 pts",
                       },
                       {
                         label: "All-rounder",
@@ -697,7 +716,7 @@ export default function RulesPage() {
                   },
                   {
                     title: "Captain the batter, not the bowler",
-                    body: "Big batting scores now add boundary bonuses too, so high-ceiling batters can still outscore bowlers with the armband. Three wickets remains a strong 48 base points before multipliers.",
+                    body: "Batters and bowlers are now more level: boundary and run milestones help batters, while maidens plus wicket-haul bonuses lift bowlers with big spells.",
                   },
                   {
                     title: "Watch ownership",

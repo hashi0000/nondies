@@ -168,6 +168,21 @@ type SnapshotDoc = {
   createdAt?: unknown;
   createdBy?: string;
   label?: string;
+  players?: SnapshotPlayerRow[];
+};
+
+type SnapshotPlayerRow = {
+  id: number;
+  name?: string;
+  runs?: number;
+  fours?: number;
+  sixes?: number;
+  wickets?: number;
+  maidens?: number;
+  catches?: number;
+  wkCatches?: number;
+  stumpings?: number;
+  runOuts?: number;
 };
 
 type BuilderState = {
@@ -331,6 +346,47 @@ function formatLockTime(d: Date) {
       hour: "2-digit", minute: "2-digit",
     });
   } catch { return d.toString(); }
+}
+
+function formatSnapshotTime(ts: unknown) {
+  if (!(ts instanceof Timestamp)) return "Unknown time";
+  try {
+    return ts.toDate().toLocaleString(undefined, {
+      weekday: "short",
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return ts.toDate().toString();
+  }
+}
+
+function snapshotStatDiffCount(curr: SnapshotPlayerRow[] | undefined, prev: SnapshotPlayerRow[] | undefined) {
+  if (!Array.isArray(curr) || curr.length === 0) return 0;
+  if (!Array.isArray(prev) || prev.length === 0) return curr.length;
+  const prevById = new Map(prev.map((p) => [p.id, p]));
+  let changed = 0;
+  for (const p of curr) {
+    const q = prevById.get(p.id);
+    if (!q) {
+      changed += 1;
+      continue;
+    }
+    const diff =
+      Number(p.runs ?? 0) !== Number(q.runs ?? 0) ||
+      Number(p.fours ?? 0) !== Number(q.fours ?? 0) ||
+      Number(p.sixes ?? 0) !== Number(q.sixes ?? 0) ||
+      Number(p.wickets ?? 0) !== Number(q.wickets ?? 0) ||
+      Number(p.maidens ?? 0) !== Number(q.maidens ?? 0) ||
+      Number(p.catches ?? 0) !== Number(q.catches ?? 0) ||
+      Number(p.wkCatches ?? 0) !== Number(q.wkCatches ?? 0) ||
+      Number(p.stumpings ?? 0) !== Number(q.stumpings ?? 0) ||
+      Number(p.runOuts ?? 0) !== Number(q.runOuts ?? 0);
+    if (diff) changed += 1;
+  }
+  return changed;
 }
 
 function getThisWeeksLockDate(now = new Date()) {
@@ -1153,6 +1209,27 @@ export default function Page() {
         return compareDraftPoolPlayers(a, b, draftSortKey, draftSortDir, ownership);
       });
   }, [players, draftTeamFilter, onlyAvailable, search, draftSortKey, draftSortDir, ownership]);
+
+  const weeklyChangeFeed = useMemo(() => {
+    const weekly = snapshots.filter((s) => s.gameweek === currentGameweek);
+    return weekly.map((snap, idx) => {
+      const prev = weekly[idx + 1];
+      const changedRows = snapshotStatDiffCount(snap.players, prev?.players);
+      const editedBy =
+        snap.createdBy && authUser && snap.createdBy === authUser.uid
+          ? "You"
+          : snap.createdBy
+            ? `${snap.createdBy.slice(0, 8)}...`
+            : "Unknown";
+      return {
+        id: snap.id,
+        label: snap.label ?? "snapshot",
+        when: formatSnapshotTime(snap.createdAt),
+        editedBy,
+        changedRows,
+      };
+    });
+  }, [snapshots, currentGameweek, authUser]);
 
   const adminSortedPlayers = useMemo(() => {
     const { key, dir } = adminStatsSort;
@@ -2590,6 +2667,34 @@ export default function Page() {
                       </div>
 
                       {/* Rewind / restore */}
+                      <div className="rounded-2xl bg-white/5 ring-1 ring-white/10">
+                        <div className="border-b border-white/10 p-4 sm:p-5">
+                          <div className="text-base font-semibold">What changed this week</div>
+                          <div className="mt-0.5 text-xs text-zinc-500">
+                            Tracks each stats save in GW{currentGameweek}, with who changed it and approximately how many player rows changed.
+                          </div>
+                        </div>
+                        <div className="p-4 sm:p-5">
+                          {weeklyChangeFeed.length === 0 ? (
+                            <div className="text-sm text-zinc-400">No stat saves recorded this gameweek yet.</div>
+                          ) : (
+                            <div className="grid gap-2">
+                              {weeklyChangeFeed.map((entry) => (
+                                <div key={entry.id} className="flex flex-col gap-1 rounded-xl bg-black/20 px-3 py-2 ring-1 ring-white/10 sm:flex-row sm:items-center sm:justify-between">
+                                  <div className="min-w-0 text-sm text-zinc-200">
+                                    <span className="font-semibold">{entry.changedRows}</span>{" "}
+                                    {entry.changedRows === 1 ? "player row changed" : "player rows changed"}
+                                  </div>
+                                  <div className="text-xs text-zinc-500">
+                                    {entry.when} · {entry.editedBy}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
                       <div className="rounded-2xl bg-white/5 ring-1 ring-white/10">
                         <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5">
                           <div>

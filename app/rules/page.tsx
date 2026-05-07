@@ -441,7 +441,7 @@ export default function RulesPage() {
                       ["1 four hit", <span key="f4" className="font-bold text-white">+1 pt</span>],
                       ["1 six hit", <span key="f6" className="font-bold text-white">+2 pts</span>],
                       ["1 wicket taken", <span key="w" className="font-bold text-white">+16 pts</span>],
-                      ["1 maiden over", <span key="m" className="font-bold text-white">+6 pts</span>],
+                      ["1 maiden over", <span key="m" className="font-bold text-white">+4 pts</span>],
                     ]}
                   />
                 </Card>
@@ -453,12 +453,12 @@ export default function RulesPage() {
                     headers={["Milestone", "Bonus", "Example"]}
                     rows={[
                       ["3+ wickets", <span key="wb3" className="font-bold text-white">+8 pts</span>, ""],
-                      ["4+ wickets", <span key="wb4" className="font-bold text-white">+16 pts</span>, <span key="wb4e" className="text-zinc-300">4 wickets, 1 maiden → 64 + 6 + 16 = <strong className="text-white">86 pts</strong></span>],
-                      ["5+ wickets", <span key="wb5" className="font-bold text-white">+25 pts</span>, <span key="wb5e" className="text-zinc-300">5 wickets, 2 maidens → 80 + 12 + 25 = <strong className="text-white">117 pts</strong></span>],
+                      ["4+ wickets", <span key="wb4" className="font-bold text-white">+16 pts</span>, <span key="wb4e" className="text-zinc-300">4 wickets, 1 maiden → 64 + 4 + 16 = <strong className="text-white">84 pts</strong></span>],
+                      ["5+ wickets", <span key="wb5" className="font-bold text-white">+25 pts</span>, <span key="wb5e" className="text-zinc-300">5 wickets, 2 maidens → 80 + 8 + 25 = <strong className="text-white">113 pts</strong></span>],
                       ["6+ wickets", <span key="wb6" className="font-bold text-white">+35 pts</span>, ""],
                       ["7+ wickets", <span key="wb7" className="font-bold text-white">+46 pts</span>, ""],
                       ["8+ wickets", <span key="wb8" className="font-bold text-white">+57 pts</span>, ""],
-                      ["9+ wickets", <span key="wb9" className="font-bold text-white">+68 pts</span>, <span key="wb9e" className="text-zinc-300">9 wickets, 3 maidens → 144 + 18 + 68 = <strong className="text-white">230 pts</strong></span>],
+                      ["9+ wickets", <span key="wb9" className="font-bold text-white">+68 pts</span>, <span key="wb9e" className="text-zinc-300">9 wickets, 3 maidens → 144 + 12 + 68 = <strong className="text-white">224 pts</strong></span>],
                       ["10 wickets", <span key="wb10" className="font-bold text-white">+80 pts</span>, ""],
                     ]}
                   />
@@ -470,9 +470,9 @@ export default function RulesPage() {
                   <Table
                     headers={["Milestone", "Bonus", "Example"]}
                     rows={[
-                      ["25+ runs",  <span key="a" className="font-bold text-white">+5 pts</span>,  ""],
-                      ["50+ runs",  <span key="b" className="font-bold text-white">+10 pts</span>, <span key="c" className="text-zinc-300">50 runs with 4x4 and 1x6 → 50 + 4 + 2 + 10 = <strong className="text-white">66 pts</strong> (before C/VC)</span>],
-                      ["75+ runs",  <span key="d" className="font-bold text-white">+15 pts</span>, ""],
+                      ["25+ runs",  <span key="a" className="font-bold text-white">+10 pts</span>,  ""],
+                      ["50+ runs",  <span key="b" className="font-bold text-white">+16 pts</span>, <span key="c" className="text-zinc-300">50 runs with 4x4 and 1x6 → 50 + 4 + 2 + 16 = <strong className="text-white">72 pts</strong> (before C/VC)</span>],
+                      ["75+ runs",  <span key="d" className="font-bold text-white">+18 pts</span>, ""],
                       ["100+ runs", <span key="e" className="font-bold text-white">+25 pts</span>, <span key="f" className="text-zinc-300">100 runs with 8x4 and 2x6 → 100 + 8 + 4 + 25 = <strong className="text-white">137 pts</strong></span>],
                     ]}
                   />
@@ -508,8 +508,8 @@ export default function RulesPage() {
                       {
                         label: "Bowler",
                         stats: "4 wickets, 2 maidens, 0 runs",
-                        calc: "4 × 16 + 2 × 6 + 16 (4w bonus)",
-                        total: "92 pts",
+                        calc: "4 × 16 + 2 × 4 + 16 (4w bonus)",
+                        total: "88 pts",
                       },
                       {
                         label: "All-rounder",

@@ -23,9 +23,9 @@ export function calculatePoints(p: FantasyStatLine) {
   const sixes = clampNonNegativeInt(p.sixes ?? 0);
   let runBonus = 0;
   if (runs >= 100) runBonus = 25;
-  else if (runs >= 75) runBonus = 15;
-  else if (runs >= 50) runBonus = 10;
-  else if (runs >= 25) runBonus = 5;
+  else if (runs >= 75) runBonus = 18;
+  else if (runs >= 50) runBonus = 16;
+  else if (runs >= 25) runBonus = 10;
 
   const wickets = clampNonNegativeInt(p.wickets);
   const maidens = clampNonNegativeInt(p.maidens ?? 0);
@@ -47,7 +47,7 @@ export function calculatePoints(p: FantasyStatLine) {
 
   const boundaryBonus = fours + sixes * 2;
   const batting = runs + runBonus + boundaryBonus;
-  const bowling = wickets * 16 + maidens * 6 + wicketBonus;
+  const bowling = wickets * 16 + maidens * 4 + wicketBonus;
   const fielding = outfieldCatches * 8;
 
   const keeperBonuses = wkC * 10 + stumpings * 12 + runOuts * 10;

@@ -2419,7 +2419,7 @@ export default function Page() {
                   <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                     <div className="text-xs text-zinc-400">
                       <span className="font-semibold text-zinc-200">Scoring:</span>{" "}
-                      1 run = 1 point, 4 = +1, 6 = +2, 25/50/75/100 run bonuses = +5/+10/+15/+25, 1 wicket = 16 points, maiden = +6, wicket-haul bonuses from 3 wickets (+8) up to 10 wickets (+80), outfield catch = 8 points, wicketkeeping catch = 10, stumping = 12, run-out involvement = 10.
+                      1 run = 1 point, 4 = +1, 6 = +2, 25/50/75/100 run bonuses = +10/+16/+18/+25, 1 wicket = 16 points, maiden = +4, wicket-haul bonuses from 3 wickets (+8) up to 10 wickets (+80), outfield catch = 8 points, wicketkeeping catch = 10, stumping = 12, run-out involvement = 10.
                     </div>
                     <div className="flex w-full shrink-0 flex-col gap-2 sm:max-w-md sm:flex-row">
                       <select

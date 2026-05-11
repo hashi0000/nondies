@@ -43,7 +43,7 @@ import {
   writeBatch,
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
-import { calculatePoints, clampNonNegativeInt } from "@/lib/fantasyPoints";
+import { calculatePoints, clampNonNegativeInt, fantasyPointsBreakdown } from "@/lib/fantasyPoints";
 import {
   BUDGET,
   FREE_TRANSFERS_PER_WEEK,
@@ -158,6 +158,8 @@ type SavedTeam = {
    * Omitted IDs are treated as GW1 — only matters for picks after GW1 saves.
    */
   playerJoinedGameweek?: Record<string, number>;
+  /** Gameweek when this team was first saved (mid-season joiners get unlimited edits until that GW’s lineup lock). */
+  firstSaveGameweek?: number;
   createdBy?: string;
   createdAt?: unknown;
 };
@@ -207,6 +209,9 @@ type AdminStatsSortKey =
   | "wickets"
   | "maidens"
   | "catches"
+  | "wkCatches"
+  | "stumpings"
+  | "runOuts"
   | "points"
   | "season";
 
@@ -536,6 +541,28 @@ function transferPenaltiesApplyInGameweek(currentGameweek: number): boolean {
   return currentGameweek > 1;
 }
 
+/** True when saves should apply transfer limits and point hits (vs GW1 or new-joiner grace before lock). */
+function transferPenaltiesApplyForTeam(currentGameweek: number, existing: SavedTeam | null, now: Date): boolean {
+  if (!transferPenaltiesApplyInGameweek(currentGameweek)) return false;
+  if (!existing) return false;
+  const fsg = existing.firstSaveGameweek;
+  if (typeof fsg !== "number" || !Number.isFinite(fsg)) return true;
+  if (Math.floor(fsg) === currentGameweek && !isSelectionLocked(now)) return false;
+  return true;
+}
+
+/** Stable key for “did this saved squad row change?” — avoids effect churn on new `teams` array identity. */
+function savedTeamHydrateWireKey(team: SavedTeam): string {
+  return [
+    team.uid,
+    (team.players ?? []).join(","),
+    team.captain ?? "",
+    team.viceCaptain ?? "",
+    team.keeper ?? "",
+    (team.name ?? "").trim(),
+  ].join("|");
+}
+
 function buildPlayerJoinedGameweekAfterSave(
   existing: SavedTeam | null,
   newPlayers: number[],
@@ -715,12 +742,31 @@ function TextField({ value, onChange, placeholder, label, type = "text", right }
   );
 }
 
-function NumberInput({ value, onChange, min = 0, step = 1 }: { value: number; onChange: (v: number) => void; min?: number; step?: number }) {
+function NumberInput({
+  value,
+  onChange,
+  min = 0,
+  step = 1,
+  className,
+  variant = "default",
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  min?: number;
+  step?: number;
+  className?: string;
+  /** Higher-contrast field for dense admin tables (easier to read). */
+  variant?: "default" | "field";
+}) {
   const n = Number.isFinite(value) ? Math.trunc(Number(value)) : 0;
+  const base =
+    variant === "field"
+      ? "w-full min-w-0 rounded-lg border border-zinc-500/80 bg-zinc-800 py-2.5 text-base font-semibold text-white shadow-[inset_0_1px_3px_rgba(0,0,0,0.45)] outline-none focus-visible:border-red-500 focus-visible:ring-2 focus-visible:ring-red-500/50"
+      : "w-full min-w-0 rounded-lg bg-white/5 px-2 py-2 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-red-500/60";
   return (
     <input type="number" inputMode="numeric" value={n} min={min} step={step}
       onChange={(e) => onChange(clampNonNegativeInt(Number(e.target.value)))}
-      className="w-full rounded-lg bg-white/5 px-2.5 py-2 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-red-500/60" />
+      className={[base, variant === "field" ? "px-2 tabular-nums" : "", className].filter(Boolean).join(" ")} />
   );
 }
 
@@ -769,19 +815,28 @@ function AdminStatsSortTh({
   colKey,
   sort,
   onSort,
+  className,
+  compact,
+  ...thProps
 }: {
   label: string;
   colKey: AdminStatsSortKey;
   sort: { key: AdminStatsSortKey; dir: "asc" | "desc" };
   onSort: (k: AdminStatsSortKey) => void;
-}) {
+  className?: string;
+  /** Narrow column — centered label (matches fixed-width stat inputs). */
+  compact?: boolean;
+} & React.ComponentPropsWithoutRef<"th">) {
   const active = sort.key === colKey;
   return (
-    <th className="px-4 py-3">
+    <th className={[compact ? "px-2 py-3" : "px-4 py-3", className].filter(Boolean).join(" ")} {...thProps}>
       <button
         type="button"
         onClick={() => onSort(colKey)}
-        className="inline-flex max-w-full items-center gap-1.5 text-left text-xs font-semibold text-zinc-300 hover:text-white transition"
+        className={[
+          "inline-flex max-w-full items-center gap-1.5 text-xs font-semibold text-zinc-300 hover:text-white transition",
+          compact ? "w-full justify-center text-center" : "text-left",
+        ].join(" ")}
         aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
       >
         <span className="truncate">{label}</span>
@@ -819,6 +874,8 @@ export default function Page() {
 
   // Draft builder — in-memory (Firestore is source of truth for roster & teams)
   const [builder, setBuilder] = useState<BuilderState>({ teamName: "", selected: [], captain: null, viceCaptain: null, keeper: null });
+  /** After Clear, skip auto-hydrate from Firestore until the saved squad snapshot changes. */
+  const clearedSavedTeamWireKeyRef = useRef<string | null>(null);
   const [ownerNameInput, setOwnerNameInput] = useState("");
   const [ownerNameTouched, setOwnerNameTouched] = useState(false);
   const [latestChatMeta, setLatestChatMeta] = useState<LatestChatMeta | null>(null);
@@ -1180,6 +1237,8 @@ export default function Page() {
 
   const [search, setSearch] = useState("");
   const [onlyAvailable, setOnlyAvailable] = useState(true);
+  /** Draft pool: only players currently in your squad (quick remove / swap). */
+  const [draftSquadOnly, setDraftSquadOnly] = useState(false);
   /** Draft pool: show all, 1st XI only, or 2nd XI only. */
   const [draftTeamFilter, setDraftTeamFilter] = useState<"all" | "1" | "2">("all");
   /** Draft pool: column + direction (available players still listed first). */
@@ -1200,15 +1259,17 @@ export default function Page() {
 
   const filteredPlayers = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const sel = new Set(builder.selected);
     return players
       .filter((p) => (draftTeamFilter === "all" ? true : p.teamTier === Number(draftTeamFilter)))
       .filter((p) => (onlyAvailable ? p.available : true))
+      .filter((p) => (!draftSquadOnly || sel.has(p.id)))
       .filter((p) => (q ? p.name.toLowerCase().includes(q) : true))
       .sort((a, b) => {
         if (a.available !== b.available) return a.available ? -1 : 1;
         return compareDraftPoolPlayers(a, b, draftSortKey, draftSortDir, ownership);
       });
-  }, [players, draftTeamFilter, onlyAvailable, search, draftSortKey, draftSortDir, ownership]);
+  }, [players, draftTeamFilter, onlyAvailable, draftSquadOnly, builder.selected, search, draftSortKey, draftSortDir, ownership]);
 
   const weeklyChangeFeed = useMemo(() => {
     const weekly = snapshots.filter((s) => s.gameweek === currentGameweek);
@@ -1264,6 +1325,21 @@ export default function Page() {
         case "catches":
           cmp = a.catches - b.catches;
           break;
+        case "fours":
+          cmp = a.fours - b.fours;
+          break;
+        case "sixes":
+          cmp = a.sixes - b.sixes;
+          break;
+        case "wkCatches":
+          cmp = a.wkCatches - b.wkCatches;
+          break;
+        case "stumpings":
+          cmp = a.stumpings - b.stumpings;
+          break;
+        case "runOuts":
+          cmp = a.runOuts - b.runOuts;
+          break;
         case "points":
           cmp = calculatePoints(a) - calculatePoints(b);
           break;
@@ -1289,6 +1365,37 @@ export default function Page() {
     [teams, authUser],
   );
 
+  const mySavedTeamHydrateWire = useMemo(
+    () => (mySavedTeam ? savedTeamHydrateWireKey(mySavedTeam) : ""),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- stable string from squad fields only
+    [mySavedTeam?.uid, mySavedTeam?.players?.join(","), mySavedTeam?.captain, mySavedTeam?.viceCaptain, mySavedTeam?.keeper, (mySavedTeam?.name ?? "").trim()],
+  );
+
+  useEffect(() => {
+    if (!authUser || !mySavedTeam) return;
+    const wire = mySavedTeamHydrateWire;
+    if (clearedSavedTeamWireKeyRef.current !== null) {
+      if (wire === clearedSavedTeamWireKeyRef.current) return;
+      clearedSavedTeamWireKeyRef.current = null;
+    }
+    setBuilder((prev) => {
+      if (prev.selected.length > 0) return prev;
+      const sel = mySavedTeam.players.filter((id) => playersById.has(id));
+      if (sel.length === 0) return prev;
+      const cap = mySavedTeam.captain != null && sel.includes(mySavedTeam.captain) ? mySavedTeam.captain : null;
+      const vc = mySavedTeam.viceCaptain != null && sel.includes(mySavedTeam.viceCaptain) ? mySavedTeam.viceCaptain : null;
+      const wk = mySavedTeam.keeper != null && sel.includes(mySavedTeam.keeper) ? mySavedTeam.keeper : null;
+      const name = (mySavedTeam.name ?? "").trim();
+      return {
+        teamName: name || prev.teamName,
+        selected: sel,
+        captain: cap,
+        viceCaptain: vc,
+        keeper: wk,
+      };
+    });
+  }, [authUser, mySavedTeam, mySavedTeamHydrateWire, playersById]);
+
   useEffect(() => {
     if (!authUser || ownerNameTouched) return;
     const fromTeam = mySavedTeam ? ownerFieldFromFirestore(mySavedTeam.ownerName) : undefined;
@@ -1297,12 +1404,19 @@ export default function Page() {
 
   const transferSavePreview = useMemo(() => {
     if (builder.selected.length !== SQUAD_SIZE) return null;
-    const penaltiesApply = transferPenaltiesApplyInGameweek(currentGameweek);
+    void lockClock;
+    const now = new Date();
+    const penaltiesApply = transferPenaltiesApplyForTeam(currentGameweek, mySavedTeam ?? null, now);
     if (!mySavedTeam) {
       return { kind: "first" as const, penaltiesApply };
     }
-    const baseline =
-      mySavedTeam.transferBaselinePlayers?.length === SQUAD_SIZE
+    const useLastSavedAsPreviewBaseline =
+      !penaltiesApply &&
+      transferPenaltiesApplyInGameweek(currentGameweek) &&
+      mySavedTeam.players.length === SQUAD_SIZE;
+    const baseline = useLastSavedAsPreviewBaseline
+      ? [...mySavedTeam.players]
+      : mySavedTeam.transferBaselinePlayers?.length === SQUAD_SIZE
         ? mySavedTeam.transferBaselinePlayers
         : mySavedTeam.players;
     const F =
@@ -1313,8 +1427,28 @@ export default function Page() {
     const extras = penaltiesApply ? transferExtrasAgainstFree(T, F) : 0;
     const penaltyDue = penaltiesApply ? penaltyPointsForExtras(extras) : 0;
     const penaltyDelta = penaltyDue - (mySavedTeam.transferPenaltyPointsApplied ?? 0);
-    return { kind: "returning" as const, penaltiesApply, T, F, extras, penaltyDue, penaltyDelta };
-  }, [mySavedTeam, builder.selected, currentGameweek]);
+    const freeUsed = penaltiesApply ? Math.min(T, F) : T;
+    return { kind: "returning" as const, penaltiesApply, T, F, extras, penaltyDue, penaltyDelta, freeUsed };
+  }, [mySavedTeam, builder.selected, currentGameweek, lockClock]);
+
+  const transferRulesFootnote = useMemo(() => {
+    void lockClock;
+    const now = new Date();
+    const gw1Open = !transferPenaltiesApplyInGameweek(currentGameweek);
+    const newJoinGrace =
+      !!mySavedTeam &&
+      transferPenaltiesApplyInGameweek(currentGameweek) &&
+      !transferPenaltiesApplyForTeam(currentGameweek, mySavedTeam, now);
+    return { gw1Open, newJoinGrace };
+  }, [currentGameweek, mySavedTeam, lockClock]);
+
+  /** Free transfers you had when this gameweek opened (from saved team). */
+  const freeTransfersAtLock = useMemo(() => {
+    if (!mySavedTeam) return null;
+    return typeof mySavedTeam.freeTransfersAtGwStart === "number" && Number.isFinite(mySavedTeam.freeTransfersAtGwStart)
+      ? Math.max(0, Math.min(Math.floor(mySavedTeam.freeTransfersAtGwStart), MAX_FREE_TRANSFERS_IN_GW))
+      : MAX_FREE_TRANSFERS_IN_GW;
+  }, [mySavedTeam]);
 
   const leaderboard = useMemo(() => {
     const rows = teams.map((t) => ({
@@ -1338,10 +1472,10 @@ export default function Page() {
   const selectedCount = builder.selected.length;
   const budgetPct = Math.min(100, Math.max(0, (spend / BUDGET) * 100));
 
-  const selectedSorted = useMemo(
-    () => builder.selected.map((id) => playersById.get(id)).filter(Boolean as unknown as <T>(v: T | undefined) => v is T)
-      .sort((a, b) => b.price - a.price || a.name.localeCompare(b.name)),
-    [builder.selected, playersById]
+  /** Squad panel order = pick order (easier to edit than price-sorted). */
+  const selectedInPickOrder = useMemo(
+    () => builder.selected.map((id) => playersById.get(id)).filter(Boolean as unknown as <T>(v: T | undefined) => v is T),
+    [builder.selected, playersById],
   );
 
   // ── Draft handlers ─────────────────────────────────────────────────────────
@@ -1376,6 +1510,8 @@ export default function Page() {
   }
 
   function clearBuilder() {
+    if (mySavedTeam) clearedSavedTeamWireKeyRef.current = savedTeamHydrateWireKey(mySavedTeam);
+    else clearedSavedTeamWireKeyRef.current = null;
     setBuilder({ teamName: "", selected: [], captain: null, viceCaptain: null, keeper: null });
   }
 
@@ -1394,6 +1530,9 @@ export default function Page() {
         const prevCumulative = existing?.cumulativePoints ?? 0;
         const playerJoinedGameweek = buildPlayerJoinedGameweekAfterSave(existing, newPlayers, currentGameweek);
 
+        const nowSave = new Date();
+        const penaltiesApply = transferPenaltiesApplyForTeam(currentGameweek, existing, nowSave);
+
         let baseline: number[];
         let freeAtGwStart: number;
 
@@ -1404,7 +1543,7 @@ export default function Page() {
           const hasBaseline =
             Array.isArray(existing.transferBaselinePlayers) &&
             existing.transferBaselinePlayers.length === SQUAD_SIZE;
-          baseline = hasBaseline
+          const baselineFromStored = hasBaseline
             ? [...existing.transferBaselinePlayers!]
             : existing.players.length === SQUAD_SIZE
               ? [...existing.players]
@@ -1413,10 +1552,12 @@ export default function Page() {
             typeof existing.freeTransfersAtGwStart === "number" && Number.isFinite(existing.freeTransfersAtGwStart)
               ? Math.max(0, Math.min(Math.floor(existing.freeTransfersAtGwStart), MAX_FREE_TRANSFERS_IN_GW))
               : MAX_FREE_TRANSFERS_IN_GW;
+          const rollBaselineForNewJoinerGrace =
+            !penaltiesApply && transferPenaltiesApplyInGameweek(currentGameweek);
+          baseline = rollBaselineForNewJoinerGrace ? [...newPlayers] : baselineFromStored;
         }
 
         const T = countOutgoingPlayerChanges(baseline, newPlayers);
-        const penaltiesApply = transferPenaltiesApplyInGameweek(currentGameweek);
         const extras = penaltiesApply ? transferExtrasAgainstFree(T, freeAtGwStart) : 0;
         const penaltyDue = penaltiesApply ? penaltyPointsForExtras(extras) : 0;
         const oldApplied = existing?.transferPenaltyPointsApplied ?? 0;
@@ -1438,6 +1579,7 @@ export default function Page() {
             freeTransfersAtGwStart: freeAtGwStart,
             transferPenaltyPointsApplied: penaltyDue,
             playerJoinedGameweek,
+            ...(!existing ? { firstSaveGameweek: currentGameweek } : {}),
           },
           { merge: true },
         );
@@ -2003,11 +2145,18 @@ export default function Page() {
                   <CardHeader title="Draft pool"
                     subtitle={`Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — max ${money(BUDGET)}. Σ pts = summed completed gameweeks (for picking form); GW = raw points this gameweek. Your leaderboard only banks weeks you owned a player.`}
                     right={
-                      <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
-                        <input type="checkbox" checked={onlyAvailable} onChange={(e) => setOnlyAvailable(e.target.checked)}
-                          className="h-4 w-4 rounded border-white/20 bg-white/10 text-red-600 focus:ring-red-500/60" />
-                        Available only
-                      </label>
+                      <div className="flex max-w-[16rem] flex-col items-end gap-2 sm:max-w-none">
+                        <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
+                          <input type="checkbox" checked={onlyAvailable} onChange={(e) => setOnlyAvailable(e.target.checked)}
+                            className="h-4 w-4 rounded border-white/20 bg-white/10 text-red-600 focus:ring-red-500/60" />
+                          Available only
+                        </label>
+                        <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
+                          <input type="checkbox" checked={draftSquadOnly} onChange={(e) => setDraftSquadOnly(e.target.checked)}
+                            className="h-4 w-4 rounded border-white/20 bg-white/10 text-red-600 focus:ring-red-500/60" />
+                          My squad only
+                        </label>
+                      </div>
                     }
                   />
                   <CardBody>
@@ -2111,7 +2260,13 @@ export default function Page() {
                           <code className="rounded bg-white/10 px-1 font-mono text-xs">players</code> collection.
                         </div>
                       ) : filteredPlayers.length === 0 ? (
-                        <div className="p-4 text-sm text-zinc-400">No players match your search or filters.</div>
+                        <div className="p-4 text-sm text-zinc-400">
+                          {draftSquadOnly && selectedCount === 0
+                            ? "Add players from the full pool first — then turn on “My squad only” to focus on your picks."
+                            : draftSquadOnly
+                              ? "No one in your current squad matches search / squad filters."
+                              : "No players match your search or filters."}
+                        </div>
                       ) : filteredPlayers.map((p) => {
                         const selected = builder.selected.includes(p.id);
                         const wouldBust = !selected && spend + p.price > BUDGET;
@@ -2122,12 +2277,25 @@ export default function Page() {
                         const ownershipPct = teams.length > 0 ? Math.round((pickCount / teams.length) * 100) : 0;
 
                         return (
-                          <button key={p.id} type="button" onClick={() => toggleSelected(p.id)} disabled={disabled}
-                            className={["w-full text-left transition px-4 py-3",
-                              disabled ? "opacity-60" : "hover:bg-white/5",
-                              selected ? "bg-red-600/10" : ""].join(" ")}>
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
+                          <div
+                            key={p.id}
+                            role="button"
+                            tabIndex={disabled ? -1 : 0}
+                            onClick={() => {
+                              if (!disabled) toggleSelected(p.id);
+                            }}
+                            onKeyDown={(e) => {
+                              if (disabled) return;
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                toggleSelected(p.id);
+                              }
+                            }}
+                            className={["flex w-full items-start justify-between gap-3 px-4 py-3 text-left transition outline-none focus-visible:ring-2 focus-visible:ring-red-500/50",
+                              disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:bg-white/5",
+                              selected ? "border-l-4 border-l-red-500 bg-red-600/10" : "border-l-4 border-l-transparent"].join(" ")}
+                          >
+                            <div className="min-w-0 flex-1">
                                 <div className="truncate text-sm font-semibold text-white">{p.name}</div>
                                 <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
                                   <span className="font-medium text-zinc-200">{money(p.price)}</span>
@@ -2135,7 +2303,7 @@ export default function Page() {
                                   <span>{p.runs} runs</span>
                                   <span className="text-zinc-600">•</span>
                                   <span>{p.wickets} wkts</span>
-                                  <span className="text-zinc-600">�</span>
+                                  <span className="text-zinc-600">•</span>
                                   <span>{p.maidens} maid</span>
                                   <span className="text-zinc-600">•</span>
                                   <span>{p.catches} ct</span>
@@ -2159,12 +2327,24 @@ export default function Page() {
                                 </div>
                                 {p.history.length > 0 && <div className="mt-2"><FormDots history={p.history} /></div>}
                               </div>
-                              <span className={["shrink-0 inline-flex items-center justify-center rounded-xl px-3 py-2 text-xs font-semibold ring-1",
-                                selected ? "bg-red-600 text-white ring-red-500/40" : "bg-white/5 text-zinc-200 ring-white/10"].join(" ")}>
-                                {selected ? "Remove" : "Add"}
+                            {selected ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (!locked) toggleSelected(p.id);
+                                }}
+                                disabled={locked}
+                                className="shrink-0 rounded-xl bg-red-600/90 px-3 py-2 text-xs font-bold text-white ring-1 ring-red-500/50 hover:bg-red-500 disabled:opacity-50"
+                              >
+                                Remove
+                              </button>
+                            ) : (
+                              <span className="shrink-0 inline-flex items-center justify-center rounded-xl bg-white/5 px-3 py-2 text-xs font-semibold text-zinc-200 ring-1 ring-white/10">
+                                Add
                               </span>
-                            </div>
-                          </button>
+                            )}
+                          </div>
                         );
                       })}
                     </div>
@@ -2172,9 +2352,9 @@ export default function Page() {
                 </Card>
               </section>
 
-              <section className="order-1 lg:order-2 lg:col-span-5">
+              <section className="order-1 lg:order-2 lg:col-span-5 lg:sticky lg:top-4 lg:max-h-[calc(100vh-6rem)] lg:self-start lg:overflow-y-auto">
                 <Card>
-                  <CardHeader title={`Your squad (${SQUAD_SIZE})`} subtitle={`Shape ${SQUAD_ROLES.bat}-${SQUAD_ROLES.ar}-${SQUAD_ROLES.bowl}-${SQUAD_ROLES.wk} (bat–AR–bowl–WK), then assign C, VC, and WK (WK only on the WK player).`}
+                  <CardHeader title={`Your squad (${SQUAD_SIZE})`} subtitle={`Pick order below. Use Draft pool → “My squad only” to focus on changes. Shape ${SQUAD_ROLES.bat}-${SQUAD_ROLES.ar}-${SQUAD_ROLES.bowl}-${SQUAD_ROLES.wk} — then C, VC, WK (WK only on a WK-listed player).${currentGameweek > 1 ? " GW2+: saves use free transfers and point hits for extras; managers who first save this gameweek get unlimited edits until lineup lock." : ""}`}
                     right={
                       <button type="button" onClick={clearBuilder} disabled={locked && selectedCount > 0}
                         className="rounded-xl bg-white/5 px-3 py-2 text-xs font-semibold text-zinc-200 ring-1 ring-white/10 hover:bg-white/10 disabled:opacity-60">
@@ -2184,6 +2364,73 @@ export default function Page() {
                   />
                   <CardBody>
                     <div className="grid gap-3">
+                      {authUser ? (
+                        <div className="rounded-xl border border-sky-500/35 bg-sky-950/25 p-3 ring-1 ring-sky-500/20">
+                          <div className="text-[11px] font-bold uppercase tracking-wider text-sky-300/90">Transfers · GW{currentGameweek}</div>
+                          {!mySavedTeam ? (
+                            <p className="mt-2 text-sm leading-relaxed text-zinc-300">
+                              {currentGameweek > 1 ? (
+                                <>
+                                  <strong className="text-zinc-100">Joining mid-season:</strong> your first save stores this squad. If that first save is in the current gameweek, you can keep changing freely until lineup lock; after lock, saves use your free transfers and can cost league points for extras — see rules.
+                                </>
+                              ) : (
+                                <>
+                                  First save creates your squad — <strong className="text-zinc-100">no transfer penalties</strong> until you have a saved team to compare against.
+                                </>
+                              )}
+                            </p>
+                          ) : freeTransfersAtLock !== null ? (
+                            <>
+                              <p className="mt-2 text-sm text-zinc-200">
+                                Free transfers at this lock:{" "}
+                                <strong className="tabular-nums text-white">{freeTransfersAtLock}</strong>
+                                <span className="text-zinc-500"> (cap {MAX_FREE_TRANSFERS_IN_GW} usable in one GW)</span>
+                              </p>
+                              {currentGameweek > 1 ? (
+                                <p className="mt-1 text-xs leading-relaxed text-zinc-400">
+                                  Season in progress — each player change beyond your free allowance costs{" "}
+                                  <strong className="text-amber-200/95">−{POINTS_PER_EXTRA_TRANSFER}</strong> league pts when you save (see breakdown below with a full squad).
+                                </p>
+                              ) : null}
+                              {!transferRulesFootnote.gw1Open && transferRulesFootnote.newJoinGrace ? (
+                                <p className="mt-1 text-xs leading-relaxed text-zinc-400">
+                                  <strong className="text-zinc-200">New this gameweek:</strong> unlimited player changes until lineup lock — then saves use your free transfers and{" "}
+                                  <strong className="text-amber-200/95">−{POINTS_PER_EXTRA_TRANSFER}</strong> league pts per extra change beyond that allowance.
+                                </p>
+                              ) : transferRulesFootnote.gw1Open ? (
+                                <p className="mt-1 text-xs leading-relaxed text-zinc-400">
+                                  <strong className="text-zinc-200">Opening gameweek (GW1):</strong> unlimited free player changes until we move to GW2 and normal transfer limits apply.
+                                </p>
+                              ) : selectedCount < SQUAD_SIZE ? (
+                                <p className="mt-1 text-xs leading-relaxed text-amber-200/90">
+                                  Select all {SQUAD_SIZE} players to preview extra-transfer league points (beyond your free allowance).
+                                </p>
+                              ) : transferSavePreview?.kind === "returning" ? (
+                                <div className="mt-2 space-y-1.5 border-t border-white/10 pt-2 text-sm text-zinc-200">
+                                  <p>
+                                    Outgoing changes vs saved baseline:{" "}
+                                    <strong className="tabular-nums text-white">{transferSavePreview.T}</strong>
+                                  </p>
+                                  <p className="text-zinc-300">
+                                    <strong className="tabular-nums text-emerald-200/95">{transferSavePreview.freeUsed}</strong> covered by free
+                                    {transferSavePreview.extras > 0 ? (
+                                      <>
+                                        {" · "}
+                                        <strong className="tabular-nums text-amber-200">{transferSavePreview.extras}</strong> extra at{" "}
+                                        <strong className="tabular-nums text-amber-200">−{POINTS_PER_EXTRA_TRANSFER}</strong> pts each →{" "}
+                                        <strong className="text-amber-200">−{transferSavePreview.penaltyDue}</strong> GW league pts total
+                                      </>
+                                    ) : (
+                                      <span className="text-emerald-200/90"> — no point deduction from transfers.</span>
+                                    )}
+                                  </p>
+                                </div>
+                              ) : null}
+                            </>
+                          ) : null}
+                        </div>
+                      ) : null}
+
                       <TextField
                         value={ownerNameInput}
                         onChange={(v) => {
@@ -2231,9 +2478,9 @@ export default function Page() {
                       </div>
 
                       <div className="divide-y divide-white/10 overflow-hidden rounded-2xl ring-1 ring-white/10">
-                        {selectedSorted.length === 0 ? (
+                        {selectedInPickOrder.length === 0 ? (
                           <div className="p-4 text-sm text-zinc-400">Pick players from the pool to build your squad.</div>
-                        ) : selectedSorted.map((p) => {
+                        ) : selectedInPickOrder.map((p) => {
                           const isC = builder.captain === p.id;
                           const isVC = builder.viceCaptain === p.id;
                           const isWK = builder.keeper === p.id;
@@ -2273,7 +2520,8 @@ export default function Page() {
                                   </div>
                                 </div>
                                 <button type="button" onClick={() => toggleSelected(p.id)} disabled={locked}
-                                  className="rounded-xl bg-white/5 px-3 py-2 text-xs font-semibold text-zinc-200 ring-1 ring-white/10 hover:bg-white/10 disabled:opacity-60">
+                                  className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-red-600/15 px-3 py-2 text-xs font-bold text-red-200 ring-1 ring-red-500/35 hover:bg-red-600/25 disabled:opacity-50">
+                                  <Trash2 className="h-3.5 w-3.5" aria-hidden />
                                   Remove
                                 </button>
                               </div>
@@ -2290,20 +2538,22 @@ export default function Page() {
                             </span>
                           ) : !transferSavePreview.penaltiesApply ? (
                             <span>
-                              GW1 pre-lock window: <strong className="text-zinc-200">unlimited changes are free</strong> (no transfer deductions until GW2).
+                              <strong className="text-zinc-200">Opening week:</strong> unlimited free player changes until GW2 transfer rules apply.
                             </span>
                           ) : transferSavePreview.extras === 0 ? (
                             <span>
                               vs GW baseline: <strong className="text-zinc-200">{transferSavePreview.T}</strong> player{" "}
-                              {transferSavePreview.T === 1 ? "change" : "changes"} with{" "}
-                              <strong className="text-zinc-200">{transferSavePreview.F}</strong> free transfers — no point hit.
+                              {transferSavePreview.T === 1 ? "change" : "changes"} —{" "}
+                              <strong className="text-zinc-200">{transferSavePreview.freeUsed}</strong> on free allowance (
+                              <strong className="text-zinc-200">{transferSavePreview.F}</strong> at lock) — no point hit.
                             </span>
                           ) : (
                             <span>
-                              vs GW baseline: <strong className="text-zinc-200">{transferSavePreview.T}</strong> changes,{" "}
-                              <strong className="text-zinc-200">{transferSavePreview.F}</strong> free →{" "}
-                              <strong className="text-amber-200">{transferSavePreview.extras}</strong> extra
-                              {transferSavePreview.extras === 1 ? "" : "s"} (GW hit <strong className="text-amber-200">−{transferSavePreview.penaltyDue}</strong> pts total).
+                              vs GW baseline: <strong className="text-zinc-200">{transferSavePreview.T}</strong> changes (
+                              <strong className="text-zinc-200">{transferSavePreview.freeUsed}</strong> free,{" "}
+                              <strong className="text-amber-200">{transferSavePreview.extras}</strong> extra at{" "}
+                              <strong className="text-amber-200">−{POINTS_PER_EXTRA_TRANSFER}</strong> each →{" "}
+                              <strong className="text-amber-200">−{transferSavePreview.penaltyDue}</strong> GW pts).
                               {transferSavePreview.penaltyDelta !== 0 ? (
                                 <>
                                   {" "}
@@ -2319,8 +2569,8 @@ export default function Page() {
                           )}
                           {currentGameweek > 1 ? (
                             <span className="mt-2 block border-t border-white/10 pt-2 text-zinc-500">
-                              From GW2 onward, <strong className="text-zinc-300">new squads and any player you bring in</strong> only earn match points from{" "}
-                              <strong className="text-zinc-300">GW{currentGameweek + 1}</strong> — not this open week (stops picking loaded stat lines for a free hit).
+                              <strong className="text-zinc-300">Mid-season signings:</strong> anyone not on your saved squad at the start of GW{currentGameweek} only earns fantasy points from{" "}
+                              <strong className="text-zinc-300">GW{currentGameweek + 1}</strong> — not from this gameweek&apos;s stats (stops loading up on players who already banked a big week).
                             </span>
                           ) : null}
                         </div>
@@ -2413,13 +2663,16 @@ export default function Page() {
               <Card>
                 <CardHeader
                   title="Player points"
-                  subtitle="GW = stats entered for the current gameweek. Σ = sum across completed gameweeks (captain boosts apply only on your team leaderboard, not Σ)."
+                  subtitle="GW = stats entered for the current gameweek. Σ = season sum across completed gameweeks. Bat / Bowl / Fld columns are fantasy points from this week only — Fld is outfield catches plus WK, stumpings and run-outs (captain boosts apply on your team leaderboard only, not here)."
                 />
                 <CardBody>
                   <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                     <div className="text-xs text-zinc-400">
                       <span className="font-semibold text-zinc-200">Scoring:</span>{" "}
-                      1 run = 1 point, 4 = +1, 6 = +2, 25/50/75/100 run bonuses = +10/+16/+18/+25, 1 wicket = 16 points, maiden = +4, wicket-haul bonuses from 3 wickets (+8) up to 10 wickets (+80), outfield catch = 8 points, wicketkeeping catch = 10, stumping = 12, run-out involvement = 10.
+                      1 run = 1 point, 4 = +1, 6 = +2, 25/50/75/100 run bonuses = +10/+16/+18/+25, 1 wicket = 16 points, maiden = +4, wicket-haul bonuses from 3 wickets (+8) up to 10 wickets (+80), outfield catch = 8 points, wicketkeeping catch = 10, stumping = 12, run-out involvement = 10.{" "}
+                      <span className="text-zinc-500">
+                        Column groups separate roster, batting stats, bowling stats, fielding &amp; WK stats, then GW fantasy breakdown (Bat / Bowl / Fld) before season Σ and total GW.
+                      </span>
                     </div>
                     <div className="flex w-full shrink-0 flex-col gap-2 sm:max-w-md sm:flex-row">
                       <select
@@ -2463,50 +2716,74 @@ export default function Page() {
                       </select>
                     </div>
                   </div>
-                  <div className="overflow-hidden rounded-2xl ring-1 ring-white/10">
-                    <div className="overflow-x-auto bg-zinc-950/40">
-                      <table className="min-w-[1060px] w-full border-collapse">
-                        <thead className="bg-black/40 text-xs font-semibold text-zinc-300">
+                  <div className="relative overflow-hidden rounded-2xl ring-1 ring-white/10">
+                    <div className="max-h-[min(75vh,52rem)] overflow-auto bg-zinc-950/40">
+                      <table className="min-w-[1320px] w-full border-collapse">
+                        <thead className="text-xs font-semibold text-zinc-300">
                           <tr>
-                            <th className="px-4 py-3 text-left">Player</th>
-                            <th className="px-4 py-3 text-left">Role</th>
-                            <th className="px-4 py-3 text-left">Squad</th>
-                            <th className="px-4 py-3 text-right">Price</th>
-                            <th className="px-4 py-3 text-right">Runs</th>
-                            <th className="px-4 py-3 text-right">4s</th>
-                            <th className="px-4 py-3 text-right">6s</th>
-                            <th className="px-4 py-3 text-right">Wkts</th>
-                            <th className="px-4 py-3 text-right">Maid</th>
-                            <th className="px-4 py-3 text-right">Catches</th>
-                            <th className="px-4 py-3 text-right">WK c.</th>
-                            <th className="px-4 py-3 text-right">Stumpings</th>
-                            <th className="px-4 py-3 text-right">Run outs</th>
-                            <th className="px-4 py-3 text-right">Σ pts</th>
-                            <th className="px-4 py-3 text-right">GW pts</th>
+                            <th className="sticky left-0 top-0 z-40 bg-zinc-950 px-4 py-3 text-left shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">
+                              Player
+                            </th>
+                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-left shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Role</th>
+                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-left shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Squad</th>
+                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Price</th>
+                            <th className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 px-4 py-2.5 text-right align-bottom shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-sky-400/90">Batting</div>
+                              <div className="mt-1 text-zinc-200">Runs</div>
+                            </th>
+                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">4s</th>
+                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">6s</th>
+                            <th className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 px-4 py-2.5 text-right align-bottom shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-amber-400/90">Bowling</div>
+                              <div className="mt-1 text-zinc-200">Wkts</div>
+                            </th>
+                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Maid</th>
+                            <th className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 px-4 py-2.5 text-right align-bottom shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-400/90">Fielding</div>
+                              <div className="mt-1 text-zinc-200">Catches</div>
+                            </th>
+                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">WK c.</th>
+                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Stump.</th>
+                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">RO</th>
+                            <th className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 px-4 py-2.5 text-right align-bottom shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-white/70">GW fantasy</div>
+                              <div className="mt-1 text-zinc-200">Bat</div>
+                            </th>
+                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Bowl</th>
+                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" title="Outfield 8× catches + WK + stump + RO bonuses">Fld</th>
+                            <th className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Σ pts</th>
+                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">GW pts</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-white/10 text-sm text-zinc-100">
-                          {playerPoints.map(({ player: p, points }) => (
-                            <tr key={p.id}>
-                              <td className="px-4 py-3 font-semibold text-white">{p.name}</td>
-                              <td className="px-4 py-3 text-zinc-300">{ROLE_LABEL[p.role]}</td>
-                              <td className="px-4 py-3 text-zinc-300">{TEAM_TIER_SHORT[p.teamTier]}</td>
-                              <td className="px-4 py-3 text-right text-zinc-200">{money(p.price)}</td>
-                              <td className="px-4 py-3 text-right text-zinc-200">{p.runs}</td>
-                              <td className="px-4 py-3 text-right text-zinc-200">{p.fours}</td>
-                              <td className="px-4 py-3 text-right text-zinc-200">{p.sixes}</td>
-                              <td className="px-4 py-3 text-right text-zinc-200">{p.wickets}</td>
-                              <td className="px-4 py-3 text-right text-zinc-200">{p.maidens}</td>
-                              <td className="px-4 py-3 text-right text-zinc-200">{p.catches}</td>
-                              <td className="px-4 py-3 text-right text-zinc-200">{p.wkCatches}</td>
-                              <td className="px-4 py-3 text-right text-zinc-200">{p.stumpings}</td>
-                              <td className="px-4 py-3 text-right text-zinc-200">{p.runOuts}</td>
-                              <td className="px-4 py-3 text-right font-semibold text-emerald-200">
-                                {sumSeasonPointsFromHistory(p.history)}
-                              </td>
-                              <td className="px-4 py-3 text-right font-bold text-white">{points}</td>
-                            </tr>
-                          ))}
+                          {playerPoints.map(({ player: p, points }) => {
+                            const br = fantasyPointsBreakdown(p);
+                            const fldPts = br.fieldingOutfield + br.keeper;
+                            return (
+                              <tr key={p.id}>
+                                <td className="sticky left-0 z-30 bg-zinc-950 px-4 py-3 font-semibold text-white shadow-[1px_0_0_0_rgba(255,255,255,0.06)]">{p.name}</td>
+                                <td className="px-4 py-3 text-zinc-300">{ROLE_LABEL[p.role]}</td>
+                                <td className="px-4 py-3 text-zinc-300">{TEAM_TIER_SHORT[p.teamTier]}</td>
+                                <td className="px-4 py-3 text-right text-zinc-200">{money(p.price)}</td>
+                                <td className="border-l border-white/10 px-4 py-3 text-right text-zinc-200">{p.runs}</td>
+                                <td className="px-4 py-3 text-right text-zinc-200">{p.fours}</td>
+                                <td className="px-4 py-3 text-right text-zinc-200">{p.sixes}</td>
+                                <td className="border-l border-white/10 px-4 py-3 text-right text-zinc-200">{p.wickets}</td>
+                                <td className="px-4 py-3 text-right text-zinc-200">{p.maidens}</td>
+                                <td className="border-l border-white/10 px-4 py-3 text-right text-zinc-200">{p.catches}</td>
+                                <td className="px-4 py-3 text-right text-zinc-200">{p.wkCatches}</td>
+                                <td className="px-4 py-3 text-right text-zinc-200">{p.stumpings}</td>
+                                <td className="px-4 py-3 text-right text-zinc-200">{p.runOuts}</td>
+                                <td className="border-l border-white/10 px-4 py-3 text-right font-medium text-sky-200/95">{br.batting}</td>
+                                <td className="px-4 py-3 text-right font-medium text-amber-200/95">{br.bowling}</td>
+                                <td className="px-4 py-3 text-right font-medium text-emerald-200/95">{fldPts}</td>
+                                <td className="border-l border-white/10 px-4 py-3 text-right font-semibold text-emerald-200">
+                                  {sumSeasonPointsFromHistory(p.history)}
+                                </td>
+                                <td className="px-4 py-3 text-right font-bold text-white">{points}</td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -2840,7 +3117,7 @@ export default function Page() {
                           <div className="w-24">
                             <label className="block">
                               <div className="mb-1.5 text-xs font-medium text-zinc-300">Price</div>
-                              <NumberInput value={newPrice} onChange={setNewPrice} min={1} />
+                              <NumberInput variant="field" value={newPrice} onChange={setNewPrice} min={1} className="text-center" />
                             </label>
                           </div>
                           <div className="flex items-end">
@@ -2855,9 +3132,14 @@ export default function Page() {
                       {/* Player stats table */}
                       <div className="rounded-2xl bg-white/5 ring-1 ring-white/10">
                         <div className="flex items-center justify-between border-b border-white/10 p-4 sm:p-5">
-                          <div>
+                          <div className="min-w-0 pr-3">
                             <div className="text-sm font-semibold text-white">Player stats</div>
-                            {unsavedStats && <div className="mt-0.5 text-xs text-amber-400">Unsaved changes</div>}
+                            <p className="mt-1 max-w-2xl text-xs leading-relaxed text-zinc-500">
+                              <strong className="font-medium text-zinc-400">Catches</strong> is outfield total (includes catches credited before WK split). Enter{" "}
+                              <strong className="font-medium text-zinc-400">WK c.</strong>, <strong className="font-medium text-zinc-400">Stump.</strong> and{" "}
+                              <strong className="font-medium text-zinc-400">RO</strong> in their columns — each run-out <em>involvement</em> is <strong className="font-medium text-zinc-400">1</strong> in RO.
+                            </p>
+                            {unsavedStats && <div className="mt-1 text-xs text-amber-400">Unsaved changes</div>}
                           </div>
                           <button type="button" onClick={() => void saveStats()} disabled={!unsavedStats || savingStats}
                             className={["inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold ring-1 transition",
@@ -2868,38 +3150,67 @@ export default function Page() {
                             {savingStats ? "Saving…" : savedStatsFlash ? "Saved ✓" : "Save stats"}
                           </button>
                         </div>
-                        <div className="overflow-x-auto">
-                          <table className="w-full min-w-[1180px] border-collapse">
+                        <div className="max-h-[min(75vh,52rem)] overflow-auto">
+                          <table className="table-fixed w-full min-w-[1640px] border-collapse">
+                            <colgroup>
+                              <col className="min-w-[11rem]" />
+                              <col className="w-44" />
+                              <col className="w-36" />
+                              <col className="w-24" />
+                              <col className="w-24" />
+                              <col className="w-24" />
+                              <col className="w-24" />
+                              <col className="w-24" />
+                              <col className="w-24" />
+                              <col className="w-24" />
+                              <col className="w-24" />
+                              <col className="w-24" />
+                              <col className="w-24" />
+                              <col className="w-24" />
+                              <col className="w-16" />
+                              <col className="w-16" />
+                              <col className="w-28" />
+                              <col className="w-12" />
+                            </colgroup>
                             <thead className="bg-black/40">
                               <tr className="text-left text-xs font-semibold text-zinc-300">
-                                <AdminStatsSortTh label="Player" colKey="name" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
-                                <AdminStatsSortTh label="Role" colKey="role" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
-                                <AdminStatsSortTh label="Squad" colKey="teamTier" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
-                                <AdminStatsSortTh label="Avail" colKey="available" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
-                                <AdminStatsSortTh label="Price" colKey="price" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
-                                <AdminStatsSortTh label="Runs" colKey="runs" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
-                                <th className="px-4 py-3 text-zinc-400">4s</th>
-                                <th className="px-4 py-3 text-zinc-400">6s</th>
-                                <AdminStatsSortTh label="Wkts" colKey="wickets" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
-                                <AdminStatsSortTh label="Maid" colKey="maidens" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
-                                <AdminStatsSortTh label="Catches" colKey="catches" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
-                                <AdminStatsSortTh label="GW" colKey="points" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
-                                <AdminStatsSortTh label="Σ" colKey="season" sort={adminStatsSort} onSort={toggleAdminStatsSort} />
-                                <th className="px-4 py-3 text-zinc-400">Form</th>
-                                <th className="px-4 py-3" aria-label="Actions" />
+                                <AdminStatsSortTh
+                                  label="Player"
+                                  colKey="name"
+                                  sort={adminStatsSort}
+                                  onSort={toggleAdminStatsSort}
+                                  className="sticky left-0 top-0 z-40 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]"
+                                />
+                                <AdminStatsSortTh label="Role" colKey="role" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                                <AdminStatsSortTh label="Squad" colKey="teamTier" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                                <AdminStatsSortTh label="Avail" colKey="available" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                                <AdminStatsSortTh compact label="Price" colKey="price" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                                <AdminStatsSortTh compact label="Runs" colKey="runs" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                                <AdminStatsSortTh compact label="4s" colKey="fours" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                                <AdminStatsSortTh compact label="6s" colKey="sixes" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                                <AdminStatsSortTh compact label="Wkts" colKey="wickets" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                                <AdminStatsSortTh compact label="Maid" colKey="maidens" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                                <AdminStatsSortTh compact label="Catches" colKey="catches" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                                <AdminStatsSortTh compact label="WK c." colKey="wkCatches" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                                <AdminStatsSortTh compact label="Stump." colKey="stumpings" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                                <AdminStatsSortTh compact label="RO" colKey="runOuts" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" title="Run-out involvements this GW" />
+                                <AdminStatsSortTh compact label="GW" colKey="points" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                                <AdminStatsSortTh compact label="Σ" colKey="season" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                                <th className="sticky top-0 z-20 bg-zinc-950 px-2 py-3 text-center text-zinc-400 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Form</th>
+                                <th className="sticky top-0 z-20 bg-zinc-950 px-2 py-3 text-center shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" aria-label="Actions" />
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-white/10">
                               {adminSortedPlayers.map((p) => (
                                 <tr key={p.id} className="text-sm text-zinc-100">
-                                  <td className="px-4 py-3 font-semibold text-white">{p.name}</td>
-                                  <td className="px-4 py-3 w-36">
+                                  <td className="sticky left-0 z-30 bg-zinc-950 px-4 py-3 font-semibold text-white shadow-[1px_0_0_0_rgba(255,255,255,0.06)]">{p.name}</td>
+                                  <td className="px-2 py-3 align-middle">
                                     <select
                                       value={p.role}
                                       onChange={(e) =>
                                         editLocalPlayer(p.id, { role: e.target.value as PlayerRole })
                                       }
-                                      className="w-full rounded-lg bg-white/5 px-2 py-2 text-xs text-white ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-red-500/60"
+                                      className="w-full rounded-lg border border-zinc-500/80 bg-zinc-800 py-2 pl-2 pr-8 text-sm font-medium text-white shadow-[inset_0_1px_3px_rgba(0,0,0,0.45)] outline-none focus-visible:border-red-500 focus-visible:ring-2 focus-visible:ring-red-500/50"
                                     >
                                       <option value="bat">Batter</option>
                                       <option value="ar">All-rounder</option>
@@ -2907,13 +3218,13 @@ export default function Page() {
                                       <option value="wk">WK</option>
                                     </select>
                                   </td>
-                                  <td className="px-4 py-3 w-32">
+                                  <td className="px-2 py-3 align-middle">
                                     <select
                                       value={p.teamTier}
                                       onChange={(e) =>
                                         editLocalPlayer(p.id, { teamTier: Number(e.target.value) as TeamTier })
                                       }
-                                      className="w-full rounded-lg bg-white/5 px-2 py-2 text-xs text-white ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-red-500/60"
+                                      className="w-full rounded-lg border border-zinc-500/80 bg-zinc-800 py-2 pl-2 pr-8 text-sm font-medium text-white shadow-[inset_0_1px_3px_rgba(0,0,0,0.45)] outline-none focus-visible:border-red-500 focus-visible:ring-2 focus-visible:ring-red-500/50"
                                     >
                                       <option value={1}>1st XI</option>
                                       <option value={2}>2nd XI</option>
@@ -2927,32 +3238,91 @@ export default function Page() {
                                       {p.available ? <span className="text-emerald-200">On</span> : <span className="text-amber-200">Off</span>}
                                     </label>
                                   </td>
-                                  <td className="px-4 py-3 w-24">
-                                    <NumberInput value={p.price} onChange={(v) => editLocalPlayer(p.id, { price: v })} />
+                                  <td className="px-2 py-3 align-middle">
+                                    <NumberInput
+                                      variant="field"
+                                      value={p.price}
+                                      onChange={(v) => editLocalPlayer(p.id, { price: v })}
+                                      className="text-center"
+                                    />
                                   </td>
-                                  <td className="px-4 py-3 w-24">
-                                    <NumberInput value={p.runs} onChange={(v) => editLocalPlayer(p.id, { runs: v })} />
+                                  <td className="border-l border-white/10 px-2 py-3 align-middle">
+                                    <NumberInput
+                                      variant="field"
+                                      value={p.runs}
+                                      onChange={(v) => editLocalPlayer(p.id, { runs: v })}
+                                      className="text-center"
+                                    />
                                   </td>
-                                  <td className="px-4 py-3 w-24">
-                                    <NumberInput value={p.fours} onChange={(v) => editLocalPlayer(p.id, { fours: v })} />
+                                  <td className="px-2 py-3 align-middle">
+                                    <NumberInput
+                                      variant="field"
+                                      value={p.fours}
+                                      onChange={(v) => editLocalPlayer(p.id, { fours: v })}
+                                      className="text-center"
+                                    />
                                   </td>
-                                  <td className="px-4 py-3 w-24">
-                                    <NumberInput value={p.sixes} onChange={(v) => editLocalPlayer(p.id, { sixes: v })} />
+                                  <td className="px-2 py-3 align-middle">
+                                    <NumberInput
+                                      variant="field"
+                                      value={p.sixes}
+                                      onChange={(v) => editLocalPlayer(p.id, { sixes: v })}
+                                      className="text-center"
+                                    />
                                   </td>
-                                  <td className="px-4 py-3 w-24">
-                                    <NumberInput value={p.wickets} onChange={(v) => editLocalPlayer(p.id, { wickets: v })} />
+                                  <td className="border-l border-white/10 px-2 py-3 align-middle">
+                                    <NumberInput
+                                      variant="field"
+                                      value={p.wickets}
+                                      onChange={(v) => editLocalPlayer(p.id, { wickets: v })}
+                                      className="text-center"
+                                    />
                                   </td>
-                                  <td className="px-4 py-3 w-24">
-                                    <NumberInput value={p.maidens} onChange={(v) => editLocalPlayer(p.id, { maidens: v })} />
+                                  <td className="px-2 py-3 align-middle">
+                                    <NumberInput
+                                      variant="field"
+                                      value={p.maidens}
+                                      onChange={(v) => editLocalPlayer(p.id, { maidens: v })}
+                                      className="text-center"
+                                    />
                                   </td>
-                                  <td className="px-4 py-3 w-24">
-                                    <NumberInput value={p.catches} onChange={(v) => editLocalPlayer(p.id, { catches: v })} />
+                                  <td className="border-l border-white/10 px-2 py-3 align-middle">
+                                    <NumberInput
+                                      variant="field"
+                                      value={p.catches}
+                                      onChange={(v) => editLocalPlayer(p.id, { catches: v })}
+                                      className="text-center"
+                                    />
                                   </td>
-                                  <td className="px-4 py-3">
-                                    <span className="font-bold text-white">{calculatePoints(p)}</span>
+                                  <td className="px-2 py-3 align-middle">
+                                    <NumberInput
+                                      variant="field"
+                                      value={p.wkCatches}
+                                      onChange={(v) => editLocalPlayer(p.id, { wkCatches: v })}
+                                      className="text-center"
+                                    />
                                   </td>
-                                  <td className="px-4 py-3">
-                                    <span className="font-semibold text-emerald-200">{sumSeasonPointsFromHistory(p.history)}</span>
+                                  <td className="px-2 py-3 align-middle">
+                                    <NumberInput
+                                      variant="field"
+                                      value={p.stumpings}
+                                      onChange={(v) => editLocalPlayer(p.id, { stumpings: v })}
+                                      className="text-center"
+                                    />
+                                  </td>
+                                  <td className="px-2 py-3 align-middle">
+                                    <NumberInput
+                                      variant="field"
+                                      value={p.runOuts}
+                                      onChange={(v) => editLocalPlayer(p.id, { runOuts: v })}
+                                      className="text-center"
+                                    />
+                                  </td>
+                                  <td className="border-l border-white/10 px-2 py-3 text-center align-middle">
+                                    <span className="text-base font-bold tabular-nums text-white">{calculatePoints(p)}</span>
+                                  </td>
+                                  <td className="px-2 py-3 text-center align-middle">
+                                    <span className="text-base font-semibold tabular-nums text-emerald-200">{sumSeasonPointsFromHistory(p.history)}</span>
                                   </td>
                                   <td className="px-4 py-3">
                                     <FormDots history={p.history} />

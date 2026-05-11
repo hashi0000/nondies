@@ -17,7 +17,18 @@ export type FantasyStatLine = {
   runOuts: number;
 };
 
-export function calculatePoints(p: FantasyStatLine) {
+/** Fantasy points for the current stat line (one gameweek row). Bat + bowl + fld sums to `total`. */
+export type FantasyPointsBreakdown = {
+  batting: number;
+  bowling: number;
+  /** Outfield catches × 8 only (WK catches excluded — see `keeper`). */
+  fieldingOutfield: number;
+  /** WK catches, stumpings and run-out involvement (scoring rules bonuses). */
+  keeper: number;
+  total: number;
+};
+
+export function fantasyPointsBreakdown(p: FantasyStatLine): FantasyPointsBreakdown {
   const runs = clampNonNegativeInt(p.runs);
   const fours = clampNonNegativeInt(p.fours ?? 0);
   const sixes = clampNonNegativeInt(p.sixes ?? 0);
@@ -48,9 +59,18 @@ export function calculatePoints(p: FantasyStatLine) {
   const boundaryBonus = fours + sixes * 2;
   const batting = runs + runBonus + boundaryBonus;
   const bowling = wickets * 16 + maidens * 4 + wicketBonus;
-  const fielding = outfieldCatches * 8;
+  const fieldingOutfield = outfieldCatches * 8;
+  const keeper = wkC * 10 + stumpings * 12 + runOuts * 10;
 
-  const keeperBonuses = wkC * 10 + stumpings * 12 + runOuts * 10;
+  return {
+    batting,
+    bowling,
+    fieldingOutfield,
+    keeper,
+    total: batting + bowling + fieldingOutfield + keeper,
+  };
+}
 
-  return batting + bowling + fielding + keeperBonuses;
+export function calculatePoints(p: FantasyStatLine) {
+  return fantasyPointsBreakdown(p).total;
 }

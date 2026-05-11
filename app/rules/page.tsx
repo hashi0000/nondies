@@ -432,6 +432,7 @@ export default function RulesPage() {
                   <p className="text-xs text-zinc-500 mb-3">
                     Scoring matches the app&apos;s calculator: run points plus boundary bonuses and a single run-milestone bonus, then bowling points (wickets, maidens, wicket-haul bonus), outfield catches, and keeper-related bonuses.
                     The draft list role (batter vs bowler, etc.) is only for squad composition — if a batter takes wickets or a bowler scores runs in real life, you get those stats as entered.
+                    In Admin, <strong className="text-zinc-400">DNB</strong> (did not bat) clears batting fantasy from runs/4s/6s for that week so it is not confused with a duck; bowling and fielding still count.
                   </p>
                   <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-3">Batting &amp; bowling</div>
                   <Table

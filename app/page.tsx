@@ -90,6 +90,7 @@ async function resetAllPlayerDocumentsStats() {
       wkCatches: 0,
       stumpings: 0,
       runOuts: 0,
+      didNotBat: false,
       history: [],
     });
     ops += 1;
@@ -112,6 +113,7 @@ type WeekRecord = {
   stumpings: number;
   runOuts: number;
   points: number;
+  didNotBat?: boolean;
 };
 
 /** 1 = 1st XI (premium prices), 2 = 2nd XI (value picks). */
@@ -136,6 +138,8 @@ type Player = {
   runOuts: number;
   available: boolean;
   history: WeekRecord[];
+  /** Did not bat this GW — no batting fantasy from runs/4s/6s; show DNB in lists & form (bowling/fielding still score). */
+  didNotBat?: boolean;
 };
 
 type SavedTeam = {
@@ -185,6 +189,7 @@ type SnapshotPlayerRow = {
   wkCatches?: number;
   stumpings?: number;
   runOuts?: number;
+  didNotBat?: boolean;
 };
 
 type BuilderState = {
@@ -380,6 +385,7 @@ function snapshotStatDiffCount(curr: SnapshotPlayerRow[] | undefined, prev: Snap
       continue;
     }
     const diff =
+      Boolean(p.didNotBat) !== Boolean(q.didNotBat) ||
       Number(p.runs ?? 0) !== Number(q.runs ?? 0) ||
       Number(p.fours ?? 0) !== Number(q.fours ?? 0) ||
       Number(p.sixes ?? 0) !== Number(q.sixes ?? 0) ||
@@ -440,6 +446,7 @@ function firestorePlayerMatchesAdminSnapshot(fs: Player, committed: Player): boo
     fs.wkCatches === committed.wkCatches &&
     fs.stumpings === committed.stumpings &&
     fs.runOuts === committed.runOuts &&
+    Boolean(fs.didNotBat) === Boolean(committed.didNotBat) &&
     JSON.stringify(fs.history) === JSON.stringify(committed.history)
   );
 }
@@ -675,8 +682,20 @@ function FormDots({ history }: { history: WeekRecord[] }) {
         const offset = 5 - recent.length;
         const rec = i >= offset ? recent[i - offset] : null;
         if (!rec) return <span key={i} className="h-2.5 w-2.5 rounded-full bg-white/10" />;
-        const color = rec.points >= 60 ? "bg-emerald-400" : rec.points >= 30 ? "bg-amber-400" : rec.points > 0 ? "bg-orange-500" : "bg-zinc-600";
-        return <span key={i} className={`h-2.5 w-2.5 rounded-full ${color}`} title={`GW${rec.week}: ${rec.points} pts`} />;
+        const dnb = Boolean(rec.didNotBat);
+        const title = dnb ? `GW${rec.week}: DNB${rec.points > 0 ? ` · ${rec.points} pts` : ""}` : `GW${rec.week}: ${rec.points} pts`;
+        if (dnb && rec.points === 0) {
+          return (
+            <span
+              key={i}
+              className="h-2.5 w-2.5 rounded-full bg-sky-500/50 ring-1 ring-sky-400/35"
+              title={title}
+            />
+          );
+        }
+        const color =
+          rec.points >= 60 ? "bg-emerald-400" : rec.points >= 30 ? "bg-amber-400" : rec.points > 0 ? "bg-orange-500" : "bg-zinc-600";
+        return <span key={i} className={`h-2.5 w-2.5 rounded-full ${color}`} title={title} />;
       })}
     </div>
   );
@@ -749,6 +768,7 @@ function NumberInput({
   step = 1,
   className,
   variant = "default",
+  disabled = false,
 }: {
   value: number;
   onChange: (v: number) => void;
@@ -757,6 +777,7 @@ function NumberInput({
   className?: string;
   /** Higher-contrast field for dense admin tables (easier to read). */
   variant?: "default" | "field";
+  disabled?: boolean;
 }) {
   const n = Number.isFinite(value) ? Math.trunc(Number(value)) : 0;
   const base =
@@ -764,9 +785,16 @@ function NumberInput({
       ? "w-full min-w-0 rounded-lg border border-zinc-500/80 bg-zinc-800 py-2.5 text-base font-semibold text-white shadow-[inset_0_1px_3px_rgba(0,0,0,0.45)] outline-none focus-visible:border-red-500 focus-visible:ring-2 focus-visible:ring-red-500/50"
       : "w-full min-w-0 rounded-lg bg-white/5 px-2 py-2 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-red-500/60";
   return (
-    <input type="number" inputMode="numeric" value={n} min={min} step={step}
+    <input type="number" inputMode="numeric" value={n} min={min} step={step} disabled={disabled}
       onChange={(e) => onChange(clampNonNegativeInt(Number(e.target.value)))}
-      className={[base, variant === "field" ? "px-2 tabular-nums" : "", className].filter(Boolean).join(" ")} />
+      className={[
+        base,
+        variant === "field" ? "px-2 tabular-nums" : "",
+        disabled ? "cursor-not-allowed opacity-50" : "",
+        className,
+      ]
+        .filter(Boolean)
+        .join(" ")} />
   );
 }
 
@@ -992,6 +1020,7 @@ export default function Page() {
             stumpings: Number(data.stumpings ?? 0),
             runOuts: Number(data.runOuts ?? 0),
             available: Boolean(data.available ?? true),
+            didNotBat: Boolean(data.didNotBat),
             history: Array.isArray(data.history) ? data.history : [],
           } satisfies Player;
         })
@@ -1656,6 +1685,7 @@ export default function Page() {
             wkCatches: stats.wkCatches,
             stumpings: stats.stumpings,
             runOuts: stats.runOuts,
+            didNotBat: false,
           };
         }),
       );
@@ -1697,6 +1727,7 @@ export default function Page() {
             wkCatches: p.wkCatches,
             stumpings: p.stumpings,
             runOuts: p.runOuts,
+            didNotBat: Boolean(p.didNotBat),
             available: p.available,
             history: p.history ?? [],
           })),
@@ -1720,6 +1751,7 @@ export default function Page() {
               wkCatches: p.wkCatches,
               stumpings: p.stumpings,
               runOuts: p.runOuts,
+              didNotBat: Boolean(p.didNotBat),
               available: p.available,
               history: p.history ?? [],
             },
@@ -1780,6 +1812,7 @@ export default function Page() {
               wkCatches: clampNonNegativeInt(Number(raw?.wkCatches ?? 0)),
               stumpings: clampNonNegativeInt(Number(raw?.stumpings ?? 0)),
               runOuts: clampNonNegativeInt(Number(raw?.runOuts ?? 0)),
+              didNotBat: Boolean(raw?.didNotBat),
               available: Boolean(raw?.available),
               history: Array.isArray(raw?.history) ? raw.history : [],
             },
@@ -1897,6 +1930,7 @@ export default function Page() {
           stumpings: p.stumpings,
           runOuts: p.runOuts,
           points: calculatePoints(p),
+          ...(p.didNotBat ? { didNotBat: true as const } : {}),
         },
       ],
       runs: 0,
@@ -1908,6 +1942,7 @@ export default function Page() {
       wkCatches: 0,
       stumpings: 0,
       runOuts: 0,
+      didNotBat: false,
     }));
 
     try {
@@ -1942,6 +1977,7 @@ export default function Page() {
             wkCatches: p.wkCatches,
             stumpings: p.stumpings,
             runOuts: p.runOuts,
+            didNotBat: false,
             history: p.history,
           });
         }
@@ -2300,7 +2336,7 @@ export default function Page() {
                                 <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
                                   <span className="font-medium text-zinc-200">{money(p.price)}</span>
                                   <span className="text-zinc-600">•</span>
-                                  <span>{p.runs} runs</span>
+                                  <span>{p.didNotBat ? "DNB" : `${p.runs} runs`}</span>
                                   <span className="text-zinc-600">•</span>
                                   <span>{p.wickets} wkts</span>
                                   <span className="text-zinc-600">•</span>
@@ -2765,7 +2801,9 @@ export default function Page() {
                                 <td className="px-4 py-3 text-zinc-300">{ROLE_LABEL[p.role]}</td>
                                 <td className="px-4 py-3 text-zinc-300">{TEAM_TIER_SHORT[p.teamTier]}</td>
                                 <td className="px-4 py-3 text-right text-zinc-200">{money(p.price)}</td>
-                                <td className="border-l border-white/10 px-4 py-3 text-right text-zinc-200">{p.runs}</td>
+                                <td className="border-l border-white/10 px-4 py-3 text-right text-zinc-200">
+                                  {p.didNotBat ? <span className="text-sky-300/90">DNB</span> : p.runs}
+                                </td>
                                 <td className="px-4 py-3 text-right text-zinc-200">{p.fours}</td>
                                 <td className="px-4 py-3 text-right text-zinc-200">{p.sixes}</td>
                                 <td className="border-l border-white/10 px-4 py-3 text-right text-zinc-200">{p.wickets}</td>
@@ -2774,7 +2812,9 @@ export default function Page() {
                                 <td className="px-4 py-3 text-right text-zinc-200">{p.wkCatches}</td>
                                 <td className="px-4 py-3 text-right text-zinc-200">{p.stumpings}</td>
                                 <td className="px-4 py-3 text-right text-zinc-200">{p.runOuts}</td>
-                                <td className="border-l border-white/10 px-4 py-3 text-right font-medium text-sky-200/95">{br.batting}</td>
+                                <td className="border-l border-white/10 px-4 py-3 text-right font-medium text-sky-200/95">
+                                  {p.didNotBat ? <span className="text-zinc-500">—</span> : br.batting}
+                                </td>
                                 <td className="px-4 py-3 text-right font-medium text-amber-200/95">{br.bowling}</td>
                                 <td className="px-4 py-3 text-right font-medium text-emerald-200/95">{fldPts}</td>
                                 <td className="border-l border-white/10 px-4 py-3 text-right font-semibold text-emerald-200">
@@ -3185,7 +3225,7 @@ export default function Page() {
                                 <AdminStatsSortTh label="Squad" colKey="teamTier" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
                                 <AdminStatsSortTh label="Avail" colKey="available" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
                                 <AdminStatsSortTh compact label="Price" colKey="price" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
-                                <AdminStatsSortTh compact label="Runs" colKey="runs" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                                <AdminStatsSortTh compact label="Runs" colKey="runs" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" title="Use DNB when they did not bat (not a duck). No batting fantasy pts; 4s/6s locked off." />
                                 <AdminStatsSortTh compact label="4s" colKey="fours" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
                                 <AdminStatsSortTh compact label="6s" colKey="sixes" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
                                 <AdminStatsSortTh compact label="Wkts" colKey="wickets" sort={adminStatsSort} onSort={toggleAdminStatsSort} className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
@@ -3247,18 +3287,37 @@ export default function Page() {
                                     />
                                   </td>
                                   <td className="border-l border-white/10 px-2 py-3 align-middle">
-                                    <NumberInput
-                                      variant="field"
-                                      value={p.runs}
-                                      onChange={(v) => editLocalPlayer(p.id, { runs: v })}
-                                      className="text-center"
-                                    />
+                                    <div className="flex min-w-[4.5rem] flex-col items-center gap-1.5">
+                                      <NumberInput
+                                        variant="field"
+                                        value={p.runs}
+                                        disabled={Boolean(p.didNotBat)}
+                                        onChange={(v) => editLocalPlayer(p.id, { runs: v, ...(v > 0 ? { didNotBat: false } : {}) })}
+                                        className="text-center"
+                                      />
+                                      <label className="flex cursor-pointer items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-sky-300/90">
+                                        <input
+                                          type="checkbox"
+                                          checked={Boolean(p.didNotBat)}
+                                          onChange={(e) => {
+                                            const on = e.target.checked;
+                                            editLocalPlayer(
+                                              p.id,
+                                              on ? { didNotBat: true, runs: 0, fours: 0, sixes: 0 } : { didNotBat: false },
+                                            );
+                                          }}
+                                          className="h-3.5 w-3.5 rounded border-white/20 bg-white/10 text-sky-500 focus:ring-sky-500/50"
+                                        />
+                                        DNB
+                                      </label>
+                                    </div>
                                   </td>
                                   <td className="px-2 py-3 align-middle">
                                     <NumberInput
                                       variant="field"
                                       value={p.fours}
-                                      onChange={(v) => editLocalPlayer(p.id, { fours: v })}
+                                      disabled={Boolean(p.didNotBat)}
+                                      onChange={(v) => editLocalPlayer(p.id, { fours: v, ...(v > 0 ? { didNotBat: false } : {}) })}
                                       className="text-center"
                                     />
                                   </td>
@@ -3266,7 +3325,8 @@ export default function Page() {
                                     <NumberInput
                                       variant="field"
                                       value={p.sixes}
-                                      onChange={(v) => editLocalPlayer(p.id, { sixes: v })}
+                                      disabled={Boolean(p.didNotBat)}
+                                      onChange={(v) => editLocalPlayer(p.id, { sixes: v, ...(v > 0 ? { didNotBat: false } : {}) })}
                                       className="text-center"
                                     />
                                   </td>

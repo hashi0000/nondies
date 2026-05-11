@@ -15,6 +15,8 @@ export type FantasyStatLine = {
   wkCatches: number;
   stumpings: number;
   runOuts: number;
+  /** Did not bat — no batting points from runs/4s/6s/milestones; bowling & fielding still count. */
+  didNotBat?: boolean;
 };
 
 /** Fantasy points for the current stat line (one gameweek row). Bat + bowl + fld sums to `total`. */
@@ -29,14 +31,17 @@ export type FantasyPointsBreakdown = {
 };
 
 export function fantasyPointsBreakdown(p: FantasyStatLine): FantasyPointsBreakdown {
-  const runs = clampNonNegativeInt(p.runs);
-  const fours = clampNonNegativeInt(p.fours ?? 0);
-  const sixes = clampNonNegativeInt(p.sixes ?? 0);
+  const didNotBat = Boolean(p.didNotBat);
+  const runs = didNotBat ? 0 : clampNonNegativeInt(p.runs);
+  const fours = didNotBat ? 0 : clampNonNegativeInt(p.fours ?? 0);
+  const sixes = didNotBat ? 0 : clampNonNegativeInt(p.sixes ?? 0);
   let runBonus = 0;
-  if (runs >= 100) runBonus = 25;
-  else if (runs >= 75) runBonus = 18;
-  else if (runs >= 50) runBonus = 16;
-  else if (runs >= 25) runBonus = 10;
+  if (!didNotBat) {
+    if (runs >= 100) runBonus = 25;
+    else if (runs >= 75) runBonus = 18;
+    else if (runs >= 50) runBonus = 16;
+    else if (runs >= 25) runBonus = 10;
+  }
 
   const wickets = clampNonNegativeInt(p.wickets);
   const maidens = clampNonNegativeInt(p.maidens ?? 0);

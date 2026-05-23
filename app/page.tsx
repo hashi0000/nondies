@@ -66,6 +66,13 @@ import {
   transferExtrasAgainstFree,
 } from "@/lib/transfers";
 import { normalizePlayCricketName } from "@/lib/playCricket/names";
+import {
+  deleteAllGwTeamsDocs,
+  gwSnapshotToSavedTeam,
+  parseGwTeamsDoc,
+  type GwTeamSnapshot,
+  type GwTeamsDoc,
+} from "@/lib/gwTeams";
 
 /** Admin: zero every player’s weekly stat row and match history (player pool docs stay). */
 async function resetAllPlayerDocumentsStats() {
@@ -618,6 +625,69 @@ function computeTeamTotal(team: SavedTeam, byId: Map<number, Player>, scoringGam
   return Math.round((computeWeekPoints(team, byId, scoringGameweek) + (team.cumulativePoints ?? 0)) * 10) / 10;
 }
 
+type SquadFieldingTotals = {
+  outfieldCatches: number;
+  wkCatches: number;
+  stumpings: number;
+  runOuts: number;
+};
+
+function squadFieldingFromStatLine(line: {
+  catches: number;
+  wkCatches: number;
+  stumpings: number;
+  runOuts: number;
+}): SquadFieldingTotals {
+  const wk = clampNonNegativeInt(line.wkCatches);
+  const total = clampNonNegativeInt(line.catches);
+  return {
+    wkCatches: wk,
+    outfieldCatches: Math.max(total - wk, 0),
+    stumpings: clampNonNegativeInt(line.stumpings),
+    runOuts: clampNonNegativeInt(line.runOuts),
+  };
+}
+
+function addSquadFieldingTotals(a: SquadFieldingTotals, b: SquadFieldingTotals): SquadFieldingTotals {
+  return {
+    outfieldCatches: a.outfieldCatches + b.outfieldCatches,
+    wkCatches: a.wkCatches + b.wkCatches,
+    stumpings: a.stumpings + b.stumpings,
+    runOuts: a.runOuts + b.runOuts,
+  };
+}
+
+/** Sum fielding events for a squad in a gameweek (live stats or completed week from history). */
+function squadFieldingSummaryForGameweek(
+  team: SavedTeam,
+  byId: Map<number, Player>,
+  scoringGameweek: number,
+  useLiveStats: boolean,
+): SquadFieldingTotals {
+  let acc: SquadFieldingTotals = { outfieldCatches: 0, wkCatches: 0, stumpings: 0, runOuts: 0 };
+  for (const id of team.players) {
+    if (playerFirstGameweekOnTeam(team, id) > scoringGameweek) continue;
+    const p = byId.get(id);
+    if (!p) continue;
+    if (useLiveStats) {
+      acc = addSquadFieldingTotals(acc, squadFieldingFromStatLine(p));
+      continue;
+    }
+    const rec = (p.history ?? []).find((h) => h.week === scoringGameweek);
+    if (rec) acc = addSquadFieldingTotals(acc, squadFieldingFromStatLine(rec));
+  }
+  return acc;
+}
+
+function formatSquadFieldingSummary(t: SquadFieldingTotals): string | null {
+  const parts: string[] = [];
+  if (t.outfieldCatches > 0) parts.push(`${t.outfieldCatches} ct`);
+  if (t.wkCatches > 0) parts.push(`${t.wkCatches} wk ct`);
+  if (t.stumpings > 0) parts.push(`${t.stumpings} st`);
+  if (t.runOuts > 0) parts.push(`${t.runOuts} ro`);
+  return parts.length ? parts.join(" · ") : null;
+}
+
 function generateBestSquad(players: Player[]) {
   const scored = players.map((p) => ({ player: p, points: calculatePoints(p) })).sort((a, b) => b.points - a.points || a.player.price - b.player.price);
   const top = scored.slice(0, SQUAD_SIZE);
@@ -961,6 +1031,10 @@ export default function Page() {
 
   // Leaderboard: view another team's XI
   const [teamModal, setTeamModal] = useState<SavedTeam | null>(null);
+  /** "live" = current squads; number = completed GW from gwTeams archive. */
+  const [leaderboardGwView, setLeaderboardGwView] = useState<number | "live">("live");
+  const [gwTeamsArchive, setGwTeamsArchive] = useState<GwTeamsDoc[]>([]);
+  const [undoingGameweek, setUndoingGameweek] = useState(false);
 
   useEffect(() => {
     if (!teamModal) return;
@@ -1104,6 +1178,27 @@ export default function Page() {
     return () => unsub();
   }, []);
 
+  // Firestore: locked squad snapshots (one doc per completed gameweek)
+  useEffect(() => {
+    if (!authUser) return;
+    const q = query(collection(db, "gwTeams"), orderBy("gameweek", "desc"));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list: GwTeamsDoc[] = [];
+        for (const d of snap.docs) {
+          const parsed = parseGwTeamsDoc(d.data() as Record<string, unknown>);
+          if (parsed) list.push(parsed);
+        }
+        setGwTeamsArchive(list);
+      },
+      (err) => {
+        setFsError(err?.message ?? "Failed to read gwTeams.");
+      },
+    );
+    return () => unsub();
+  }, [authUser]);
+
   useEffect(() => {
     if (!authUser) return;
     const q = query(collection(db, "chatMessages"), orderBy("createdAt", "desc"), limit(1));
@@ -1233,6 +1328,15 @@ export default function Page() {
   // ── Derived ────────────────────────────────────────────────────────────────
 
   const playersById = useMemo(() => new Map(players.map((p) => [p.id, p])), [players]);
+  /** Same source as End GW — includes unsaved admin table so catches update the leaderboard after Save stats (and for admin preview before save). */
+  const scoringPlayers = useMemo(
+    () => (unsavedStats ? localPlayers : players),
+    [unsavedStats, localPlayers, players],
+  );
+  const scoringPlayersById = useMemo(
+    () => new Map(scoringPlayers.map((p) => [p.id, p])),
+    [scoringPlayers],
+  );
   /** Bumps on an interval so the lock flips at deadline without needing a full page reload. */
   const [lockClock, setLockClock] = useState(0);
   useEffect(() => {
@@ -1480,16 +1584,54 @@ export default function Page() {
   }, [mySavedTeam]);
 
   const leaderboard = useMemo(() => {
-    const rows = teams.map((t) => ({
-      team: t,
-      weekPts: computeWeekPoints(t, playersById, currentGameweek),
-      total: computeTeamTotal(t, playersById, currentGameweek),
-      capName: t.captain ? playersById.get(t.captain)?.name ?? "—" : "—",
-      vcName: t.viceCaptain ? playersById.get(t.viceCaptain)?.name ?? "—" : "—",
-    }));
+    const rows = teams.map((t) => {
+      const fielding = squadFieldingSummaryForGameweek(t, scoringPlayersById, currentGameweek, true);
+      return {
+        team: t,
+        weekPts: computeWeekPoints(t, scoringPlayersById, currentGameweek),
+        total: computeTeamTotal(t, scoringPlayersById, currentGameweek),
+        capName: t.captain ? scoringPlayersById.get(t.captain)?.name ?? "—" : "—",
+        vcName: t.viceCaptain ? scoringPlayersById.get(t.viceCaptain)?.name ?? "—" : "—",
+        fieldingLabel: formatSquadFieldingSummary(fielding),
+      };
+    });
     rows.sort((a, b) => b.total - a.total || a.team.name.localeCompare(b.team.name));
     return rows;
-  }, [teams, playersById, currentGameweek]);
+  }, [teams, scoringPlayersById, currentGameweek]);
+
+  const completedGameweeks = useMemo(
+    () => gwTeamsArchive.map((g) => g.gameweek).sort((a, b) => b - a),
+    [gwTeamsArchive],
+  );
+
+  const historicalLeaderboard = useMemo(() => {
+    if (leaderboardGwView === "live") return null;
+    const doc = gwTeamsArchive.find((g) => g.gameweek === leaderboardGwView);
+    if (!doc) return [];
+    const rows = doc.teams.map((ts) => {
+      const team = gwSnapshotToSavedTeam(ts) as SavedTeam;
+      const fielding = squadFieldingSummaryForGameweek(team, playersById, leaderboardGwView, false);
+      return {
+        team,
+        weekPts: Math.round(ts.weekPoints * 10) / 10,
+        total: Math.round(ts.cumulativePointsAfter * 10) / 10,
+        capName: ts.captain ? playersById.get(ts.captain)?.name ?? "—" : "—",
+        vcName: ts.viceCaptain ? playersById.get(ts.viceCaptain)?.name ?? "—" : "—",
+        fieldingLabel: formatSquadFieldingSummary(fielding),
+      };
+    });
+    rows.sort((a, b) => b.weekPts - a.weekPts || b.total - a.total || a.team.name.localeCompare(b.team.name));
+    return rows;
+  }, [leaderboardGwView, gwTeamsArchive, playersById]);
+
+  const displayedLeaderboard = historicalLeaderboard ?? leaderboard;
+  const leaderboardViewLabel =
+    leaderboardGwView === "live" ? `GW${currentGameweek} (live)` : `GW${leaderboardGwView} (archive)`;
+
+  useEffect(() => {
+    if (leaderboardGwView === "live") return;
+    if (!completedGameweeks.includes(leaderboardGwView)) setLeaderboardGwView("live");
+  }, [leaderboardGwView, completedGameweeks]);
   const hasUnreadPavilion = useMemo(() => {
     if (!authUser || !latestChatMeta) return false;
     if (latestChatMeta.userId === authUser.uid) return false;
@@ -1947,6 +2089,7 @@ export default function Page() {
 
     try {
       await runAction("End gameweek", async () => {
+        const teamSnapshots: GwTeamSnapshot[] = [];
         const batch = writeBatch(db);
         for (const team of teams) {
           const weekPts = computeWeekPoints(team, playersByIdForGw, gw);
@@ -1959,8 +2102,26 @@ export default function Page() {
               : MAX_FREE_TRANSFERS_IN_GW;
           const unused = Math.max(0, F - TEnd);
           const nextFree = freeTransfersAfterRollover(unused);
+          const cumulativeBefore = team.cumulativePoints ?? 0;
+          const cumulativeAfter = Math.round((cumulativeBefore + weekPts) * 10) / 10;
+          teamSnapshots.push({
+            uid: team.uid,
+            name: team.name,
+            ownerName: team.ownerName,
+            players: [...team.players],
+            captain: team.captain,
+            viceCaptain: team.viceCaptain,
+            keeper: team.keeper,
+            weekPoints: weekPts,
+            cumulativePointsBefore: cumulativeBefore,
+            cumulativePointsAfter: cumulativeAfter,
+            transferBaselinePlayers: [...baseline],
+            freeTransfersAtGwStart: F,
+            transferPenaltyPointsApplied: team.transferPenaltyPointsApplied ?? 0,
+            playerJoinedGameweek: team.playerJoinedGameweek ? { ...team.playerJoinedGameweek } : {},
+          });
           batch.update(doc(db, "teams", team.uid), {
-            cumulativePoints: Math.round(((team.cumulativePoints ?? 0) + weekPts) * 10) / 10,
+            cumulativePoints: cumulativeAfter,
             transferBaselinePlayers: [...team.players],
             freeTransfersAtGwStart: nextFree,
             transferPenaltyPointsApplied: 0,
@@ -1981,6 +2142,12 @@ export default function Page() {
             history: p.history,
           });
         }
+        batch.set(doc(db, "gwTeams", String(gw)), {
+          gameweek: gw,
+          endedAt: serverTimestamp(),
+          endedBy: authUser?.uid ?? null,
+          teams: teamSnapshots,
+        });
         batch.set(doc(db, "gameState", "current"), { currentGameweek: gw + 1 }, { merge: true });
         await batch.commit();
       });
@@ -1988,6 +2155,82 @@ export default function Page() {
       setTab("draft");
     } catch {
       /* runAction already set actionError */
+    }
+  }
+
+  async function undoLastGameweek() {
+    if (currentGameweek <= 1) return;
+    const gwToUndo = currentGameweek - 1;
+    if (
+      !window.confirm(
+        `Undo ending GW${gwToUndo}? This restores GW${gwToUndo} as the active gameweek, puts that week’s player stats back on the admin table, reverses leaderboard totals for that round, and restores every saved squad to what it was when GW${gwToUndo} ended. Any GW${currentGameweek} stats or squad changes will be lost. Continue?`,
+      )
+    ) {
+      return;
+    }
+    statsSavePendingRef.current = null;
+    setUndoingGameweek(true);
+    try {
+      await runAction("Undo last gameweek", async () => {
+        const gwRef = doc(db, "gwTeams", String(gwToUndo));
+        const gwSnap = await getDoc(gwRef);
+        if (!gwSnap.exists()) {
+          throw new Error(
+            `No squad snapshot for GW${gwToUndo}. Snapshots are saved when you End GW — older weeks cannot be undone this way.`,
+          );
+        }
+        const gwDoc = parseGwTeamsDoc(gwSnap.data() as Record<string, unknown>);
+        if (!gwDoc || gwDoc.teams.length === 0) {
+          throw new Error(`GW${gwToUndo} snapshot is empty or invalid.`);
+        }
+
+        const sourcePlayers = unsavedStats ? localPlayers : players;
+        const batch = writeBatch(db);
+
+        for (const p of sourcePlayers) {
+          const hist = [...(p.history ?? [])];
+          const idx = hist.findIndex((h) => h.week === gwToUndo);
+          if (idx === -1) continue;
+          const rec = hist[idx];
+          const newHist = hist.filter((_, i) => i !== idx);
+          batch.update(doc(db, "players", String(p.id)), {
+            runs: rec.runs,
+            fours: rec.fours,
+            sixes: rec.sixes,
+            wickets: rec.wickets,
+            maidens: rec.maidens,
+            catches: rec.catches,
+            wkCatches: rec.wkCatches,
+            stumpings: rec.stumpings,
+            runOuts: rec.runOuts,
+            didNotBat: Boolean(rec.didNotBat),
+            history: newHist,
+          });
+        }
+
+        for (const ts of gwDoc.teams) {
+          batch.update(doc(db, "teams", ts.uid), {
+            name: ts.name,
+            ownerName: ts.ownerName ?? null,
+            players: [...ts.players],
+            captain: ts.captain,
+            viceCaptain: ts.viceCaptain,
+            keeper: ts.keeper,
+            cumulativePoints: ts.cumulativePointsBefore,
+            transferBaselinePlayers: [...ts.transferBaselinePlayers],
+            freeTransfersAtGwStart: ts.freeTransfersAtGwStart,
+            transferPenaltyPointsApplied: ts.transferPenaltyPointsApplied ?? 0,
+            playerJoinedGameweek: ts.playerJoinedGameweek ?? {},
+          });
+        }
+
+        batch.set(doc(db, "gameState", "current"), { currentGameweek: gwToUndo }, { merge: true });
+        await batch.commit();
+      });
+      setUnsavedStats(false);
+      setLeaderboardGwView("live");
+    } finally {
+      setUndoingGameweek(false);
     }
   }
 
@@ -2003,6 +2246,7 @@ export default function Page() {
     try {
       await runAction("Season reset — keep squads", async () => {
         await resetAllPlayerDocumentsStats();
+        await deleteAllGwTeamsDocs(db);
 
         const teamSnap = await getDocs(collection(db, "teams"));
         const writeLimit = 450;
@@ -2037,6 +2281,7 @@ export default function Page() {
         await flush();
       });
       setUnsavedStats(false);
+      setLeaderboardGwView("live");
     } catch {
       /* runAction already set actionError */
     }
@@ -2054,6 +2299,7 @@ export default function Page() {
     try {
       await runAction("Reset stats & remove teams", async () => {
         await resetAllPlayerDocumentsStats();
+        await deleteAllGwTeamsDocs(db);
 
         const teamSnap = await getDocs(collection(db, "teams"));
         const writeLimit = 450;
@@ -2078,6 +2324,7 @@ export default function Page() {
       });
       setUnsavedStats(false);
       clearBuilder();
+      setLeaderboardGwView("live");
       setTab("draft");
     } catch {
       /* runAction already set actionError */
@@ -2631,22 +2878,58 @@ export default function Page() {
           {tab === "leaderboard" ? (
             <section className="lg:col-span-12">
               <Card>
-                <CardHeader title={`Leaderboard — GW${currentGameweek}`} subtitle="Total = cumulative points across all gameweeks." />
+                <CardHeader
+                  title={`Leaderboard — ${leaderboardViewLabel}`}
+                  subtitle={
+                    leaderboardGwView === "live"
+                      ? "Total = cumulative points across completed gameweeks plus this week. View past gameweeks to see locked squads."
+                      : "Archived squads from when this gameweek was ended. Totals include points through this week."
+                  }
+                />
                 <CardBody>
-                  {leaderboard.length === 0 ? (
+                  <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                    <label className="block flex-1 sm:max-w-xs">
+                      <div className="mb-1.5 text-xs font-medium text-zinc-400">Gameweek</div>
+                      <select
+                        value={leaderboardGwView === "live" ? "live" : String(leaderboardGwView)}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setLeaderboardGwView(v === "live" ? "live" : Number(v));
+                        }}
+                        className="w-full rounded-xl bg-white/5 px-3 py-2 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-red-500/60"
+                        aria-label="Select gameweek to view"
+                      >
+                        <option value="live">Live — GW{currentGameweek}</option>
+                        {completedGameweeks.map((gw) => (
+                          <option key={gw} value={String(gw)}>
+                            GW{gw} — archived squads
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  {displayedLeaderboard.length === 0 ? (
                     <div className="rounded-2xl bg-white/5 p-6 text-center ring-1 ring-white/10">
                       <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-red-600/15 ring-1 ring-red-500/30">
                         <Trophy className="h-6 w-6 text-red-300" />
                       </div>
-                      <div className="mt-3 text-base font-semibold">No teams yet</div>
-                      <div className="mt-1 text-sm text-zinc-400">Save your squad to appear here.</div>
-                      <button type="button" onClick={() => setTab("draft")} className="mt-4 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white ring-1 ring-red-500/40 hover:bg-red-500">
-                        Start drafting
-                      </button>
+                      <div className="mt-3 text-base font-semibold">
+                        {leaderboardGwView === "live" ? "No teams yet" : `No squads archived for GW${leaderboardGwView}`}
+                      </div>
+                      <div className="mt-1 text-sm text-zinc-400">
+                        {leaderboardGwView === "live"
+                          ? "Save your squad to appear here."
+                          : "This gameweek was ended before squad snapshots were enabled, or no teams existed then."}
+                      </div>
+                      {leaderboardGwView === "live" ? (
+                        <button type="button" onClick={() => setTab("draft")} className="mt-4 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white ring-1 ring-red-500/40 hover:bg-red-500">
+                          Start drafting
+                        </button>
+                      ) : null}
                     </div>
                   ) : (
                     <div className="grid gap-3">
-                      {leaderboard.map((row, idx) => (
+                      {displayedLeaderboard.map((row, idx) => (
                         <div key={row.team.uid} className={["rounded-2xl p-4 ring-1 sm:p-5",
                           row.team.uid === authUser.uid ? "bg-red-600/8 ring-red-500/20" : "bg-white/5 ring-white/10"].join(" ")}>
                           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -2665,11 +2948,19 @@ export default function Page() {
                               <div className="mt-2 flex flex-wrap gap-2 text-xs">
                                 <Pill><span className="text-zinc-400">Captain</span>{" "}<span className="font-semibold">{row.capName}</span></Pill>
                                 <Pill><span className="text-zinc-400">VC</span>{" "}<span className="font-semibold">{row.vcName}</span></Pill>
+                                {row.fieldingLabel ? (
+                                  <Pill tone="green">
+                                    <span className="text-zinc-400">Fielding</span>{" "}
+                                    <span className="font-semibold">{row.fieldingLabel}</span>
+                                  </Pill>
+                                ) : null}
                               </div>
                             </div>
                             <div className="shrink-0 flex items-end gap-5 sm:flex-col sm:items-end sm:gap-1">
                               <div className="text-right">
-                                <div className="text-xs font-medium text-zinc-500">This week</div>
+                                <div className="text-xs font-medium text-zinc-500">
+                                  {leaderboardGwView === "live" ? "This week" : "GW points"}
+                                </div>
                                 <div className="text-xl font-bold text-zinc-200">{row.weekPts}</div>
                               </div>
                               <div className="text-right">
@@ -2905,6 +3196,19 @@ export default function Page() {
                           className="rounded-2xl bg-red-600 px-4 py-3 text-sm font-bold text-white ring-1 ring-red-500/40 hover:bg-red-500">
                           End GW{currentGameweek} &amp; carry over points
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => void undoLastGameweek()}
+                          disabled={currentGameweek <= 1 || undoingGameweek}
+                          className={[
+                            "rounded-2xl px-4 py-3 text-sm font-bold ring-1 transition",
+                            currentGameweek <= 1 || undoingGameweek
+                              ? "bg-white/5 text-zinc-500 ring-white/10 cursor-not-allowed"
+                              : "bg-amber-700/40 text-amber-50 ring-amber-500/35 hover:bg-amber-600/45",
+                          ].join(" ")}
+                        >
+                          {undoingGameweek ? "Undoing…" : `Undo end of GW${currentGameweek - 1}`}
+                        </button>
                         <button type="button" onClick={() => void bulkAvailability(true)}
                           className="rounded-2xl bg-white/5 px-4 py-3 text-sm font-bold text-zinc-200 ring-1 ring-white/10 hover:bg-white/10">
                           Activate all players
@@ -2937,6 +3241,8 @@ export default function Page() {
                       </div>
                       <p className="text-xs leading-relaxed text-zinc-400">
                         After <strong className="text-zinc-200">End GW</strong>, each saved team keeps its running total (<strong className="text-zinc-200">Total</strong> on the leaderboard).
+                        A locked squad snapshot is saved for that gameweek — everyone can browse past picks on the Leaderboard tab.
+                        <strong className="text-zinc-200"> Undo end of GW</strong> restores the previous gameweek if you ended it by mistake (requires a snapshot from that End GW).
                         Players&apos; editable stat rows go to zero for the new gameweek until match data is entered, so GW / base points display as{" "}
                         <strong className="text-zinc-200">0</strong> until then.
                       </p>
@@ -3446,8 +3752,16 @@ export default function Page() {
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
               <div className="grid gap-2">
                 {(teamModal.players ?? []).map((pid) => {
-                  const p = playersById.get(pid);
+                  const modalLive = leaderboardGwView === "live";
+                  const modalGw = modalLive ? currentGameweek : leaderboardGwView;
+                  const pool = modalLive ? scoringPlayersById : playersById;
+                  const p = pool.get(pid);
                   if (!p) return null;
+                  const hist = !modalLive ? (p.history ?? []).find((h) => h.week === modalGw) : null;
+                  const statLine = hist ?? p;
+                  const scoresThisGw = playerFirstGameweekOnTeam(teamModal, pid) <= modalGw;
+                  const fieldingLabel = scoresThisGw ? formatSquadFieldingSummary(squadFieldingFromStatLine(statLine)) : null;
+                  const basePts = scoresThisGw ? calculatePoints(statLine) : 0;
                   const isC = teamModal.captain === pid;
                   const isVC = teamModal.viceCaptain === pid;
                   const isWK = teamModal.keeper === pid;
@@ -3462,11 +3776,12 @@ export default function Page() {
                           {isC ? <Pill tone="red">C</Pill> : null}
                           {isVC ? <Pill tone="amber">VC</Pill> : null}
                           {isWK ? <Pill tone="blue">WK</Pill> : null}
+                          {fieldingLabel ? <Pill tone="green">{fieldingLabel}</Pill> : null}
                         </div>
                       </div>
                       <div className="text-right">
                         <div className="text-xs font-medium text-zinc-400">Base pts</div>
-                        <div className="text-base font-black text-white">{calculatePoints(p)}</div>
+                        <div className="text-base font-black text-white">{basePts}</div>
                       </div>
                     </div>
                   );

@@ -93,5 +93,11 @@ service cloud.firestore {
       allow read: if canManageLeague();
       allow create, update, delete: if canManageLeague();
     }
+
+    // Locked squad snapshots — written when admin ends a gameweek; read by all signed-in users.
+    match /gwTeams/{gameweekId} {
+      allow read: if signedIn();
+      allow create, update, delete: if canManageLeague();
+    }
   }
 }

@@ -578,6 +578,20 @@ function savedTeamHydrateWireKey(team: SavedTeam): string {
   ].join("|");
 }
 
+function builderStateFromSavedTeam(team: SavedTeam, byId: Map<number, Player>): BuilderState {
+  const sel = (team.players ?? []).filter((id) => byId.has(id));
+  const cap = team.captain != null && sel.includes(team.captain) ? team.captain : null;
+  const vc = team.viceCaptain != null && sel.includes(team.viceCaptain) ? team.viceCaptain : null;
+  const wk = team.keeper != null && sel.includes(team.keeper) ? team.keeper : null;
+  return {
+    teamName: (team.name ?? "").trim(),
+    selected: sel,
+    captain: cap,
+    viceCaptain: vc,
+    keeper: wk,
+  };
+}
+
 function buildPlayerJoinedGameweekAfterSave(
   existing: SavedTeam | null,
   newPlayers: number[],
@@ -1590,21 +1604,22 @@ export default function Page() {
     }
     setBuilder((prev) => {
       if (prev.selected.length > 0) return prev;
-      const sel = mySavedTeam.players.filter((id) => playersById.has(id));
-      if (sel.length === 0) return prev;
-      const cap = mySavedTeam.captain != null && sel.includes(mySavedTeam.captain) ? mySavedTeam.captain : null;
-      const vc = mySavedTeam.viceCaptain != null && sel.includes(mySavedTeam.viceCaptain) ? mySavedTeam.viceCaptain : null;
-      const wk = mySavedTeam.keeper != null && sel.includes(mySavedTeam.keeper) ? mySavedTeam.keeper : null;
-      const name = (mySavedTeam.name ?? "").trim();
-      return {
-        teamName: name || prev.teamName,
-        selected: sel,
-        captain: cap,
-        viceCaptain: vc,
-        keeper: wk,
-      };
+      const next = builderStateFromSavedTeam(mySavedTeam, playersById);
+      if (next.selected.length === 0) return prev;
+      return { ...next, teamName: next.teamName || prev.teamName };
     });
   }, [authUser, mySavedTeam, mySavedTeamHydrateWire, playersById]);
+
+  /** After End GW, reload saved squad into the draft panel (do not leave it blank). */
+  useEffect(() => {
+    if (!authUser || !mySavedTeam || mySavedTeam.players.length !== SQUAD_SIZE) return;
+    if (builder.selected.length > 0) return;
+    clearedSavedTeamWireKeyRef.current = null;
+    const next = builderStateFromSavedTeam(mySavedTeam, playersById);
+    if (next.selected.length !== SQUAD_SIZE) return;
+    setBuilder(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when GW advances or saved squad arrives empty-handed
+  }, [currentGameweek, mySavedTeam?.uid, mySavedTeam?.players?.join(","), playersById]);
 
   useEffect(() => {
     if (!authUser || ownerNameTouched) return;
@@ -2216,10 +2231,17 @@ export default function Page() {
             playerJoinedGameweek: team.playerJoinedGameweek ? { ...team.playerJoinedGameweek } : {},
           });
           teamBatch.update(doc(db, "teams", team.uid), {
+            name: team.name,
+            ownerName: team.ownerName ?? null,
+            players: [...team.players],
+            captain: team.captain,
+            viceCaptain: team.viceCaptain,
+            keeper: team.keeper,
             cumulativePoints: cumulativeAfter,
             transferBaselinePlayers: [...team.players],
             freeTransfersAtGwStart: nextFree,
             transferPenaltyPointsApplied: 0,
+            playerJoinedGameweek: team.playerJoinedGameweek ?? {},
           });
         }
 
@@ -2272,10 +2294,64 @@ export default function Page() {
           throw new Error(`gameState write — ${msg}`);
         }
       });
-      clearBuilder();
+      clearedSavedTeamWireKeyRef.current = null;
+      const mine = teams.find((t) => t.uid === authUser?.uid);
+      if (mine && mine.players.length === SQUAD_SIZE) {
+        setBuilder(builderStateFromSavedTeam(mine, playersByIdForGw));
+      }
       setTab("draft");
     } catch {
       /* runAction already set actionError */
+    }
+  }
+
+  async function restoreSquadsFromLastEndedGw() {
+    const lastGw = completedGameweeks[0];
+    if (lastGw == null) {
+      setActionError("No completed gameweek snapshot found in gwTeams.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Restore every manager’s squad (players, C/VC/WK) from the GW${lastGw} snapshot? Points and current GW are not changed. Use if squads look empty after End GW.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await runAction(`Restore squads from GW${lastGw}`, async () => {
+        const gwRef = doc(db, "gwTeams", String(lastGw));
+        const gwSnap = await getDoc(gwRef);
+        if (!gwSnap.exists()) throw new Error(`gwTeams/${lastGw} not found.`);
+        const gwDoc = parseGwTeamsDoc(gwSnap.data() as Record<string, unknown>);
+        if (!gwDoc?.teams.length) throw new Error(`GW${lastGw} snapshot has no teams.`);
+        const batch = writeBatch(db);
+        for (const ts of gwDoc.teams) {
+          if (!ts.players?.length) continue;
+          batch.update(doc(db, "teams", ts.uid), {
+            name: ts.name,
+            ownerName: ts.ownerName ?? null,
+            players: [...ts.players],
+            captain: ts.captain,
+            viceCaptain: ts.viceCaptain,
+            keeper: ts.keeper,
+            transferBaselinePlayers: [...ts.transferBaselinePlayers],
+            freeTransfersAtGwStart: ts.freeTransfersAtGwStart,
+            transferPenaltyPointsApplied: ts.transferPenaltyPointsApplied ?? 0,
+            playerJoinedGameweek: ts.playerJoinedGameweek ?? {},
+          });
+        }
+        await batch.commit();
+      });
+      clearedSavedTeamWireKeyRef.current = null;
+      if (authUser && mySavedTeam) {
+        const snap = gwTeamsArchive.find((g) => g.gameweek === lastGw)?.teams.find((t) => t.uid === authUser.uid);
+        if (snap) {
+          setBuilder(builderStateFromSavedTeam(gwSnapshotToSavedTeam(snap) as SavedTeam, playersById));
+        }
+      }
+    } catch {
+      /* runAction sets actionError */
     }
   }
 
@@ -3345,6 +3421,19 @@ export default function Page() {
                           ].join(" ")}
                         >
                           {undoingGameweek ? "Undoing…" : `Undo end of GW${currentGameweek - 1}`}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void restoreSquadsFromLastEndedGw()}
+                          disabled={completedGameweeks.length === 0}
+                          className={[
+                            "rounded-2xl px-4 py-3 text-sm font-bold ring-1 transition",
+                            completedGameweeks.length === 0
+                              ? "bg-white/5 text-zinc-500 ring-white/10 cursor-not-allowed"
+                              : "bg-sky-800/40 text-sky-50 ring-sky-500/35 hover:bg-sky-700/45",
+                          ].join(" ")}
+                        >
+                          Restore squads from last GW snapshot
                         </button>
                         <button type="button" onClick={() => void bulkAvailability(true)}
                           className="rounded-2xl bg-white/5 px-4 py-3 text-sm font-bold text-zinc-200 ring-1 ring-white/10 hover:bg-white/10">

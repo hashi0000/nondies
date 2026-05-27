@@ -30,6 +30,7 @@ import {
   collection,
   doc,
   deleteDoc,
+  deleteField,
   getDoc,
   getDocs,
   limit,
@@ -42,7 +43,7 @@ import {
   updateDoc,
   writeBatch,
 } from "firebase/firestore";
-import { auth, db } from "@/lib/firebase";
+import { auth, db, firebaseProjectId } from "@/lib/firebase";
 import { calculatePoints, clampNonNegativeInt, fantasyPointsBreakdown } from "@/lib/fantasyPoints";
 import {
   BUDGET,
@@ -891,6 +892,78 @@ function ownerFieldFromFirestore(value: unknown): string | undefined {
  * Map a teams/{id} snapshot. Spread doc data first, then set `uid` from the document id so a
  * stray `uid` field in the document cannot overwrite the real owner id (that broke owner matching).
  */
+async function assertLeagueAdminFirestoreAccess(user: User): Promise<{
+  hasLeagueAdminDoc: boolean;
+  hasAdminClaim: boolean;
+}> {
+  await user.getIdToken(true);
+  const leagueSnap = await getDoc(doc(db, "leagueAdmins", user.uid));
+  const token = await user.getIdTokenResult();
+  const hasLeagueAdminDoc = leagueSnap.exists();
+  const hasAdminClaim = token.claims.admin === true;
+  if (!hasLeagueAdminDoc && !hasAdminClaim) {
+    throw new Error(
+      `This account is not a league admin. In Firebase project "${firebaseProjectId}", create ` +
+        `leagueAdmins/${user.uid} (empty doc is fine), publish firestore rules, then sign out and back in.`,
+    );
+  }
+  return { hasLeagueAdminDoc, hasAdminClaim };
+}
+
+/** Pinpoints which collection blocks End gameweek (rules / wrong project / stale token). */
+async function probeLeagueAdminWrites(user: User, otherTeamUid: string | null): Promise<string[]> {
+  const lines: string[] = [];
+  const access = await assertLeagueAdminFirestoreAccess(user);
+  lines.push(
+    `Project: ${firebaseProjectId} · UID: ${user.uid} · leagueAdmins doc: ${access.hasLeagueAdminDoc ? "yes" : "no"} · admin claim: ${access.hasAdminClaim ? "yes" : "no"}`,
+  );
+
+  const probes: { label: string; run: () => Promise<void> }[] = [
+    {
+      label: "gameState",
+      run: async () => {
+        await setDoc(doc(db, "gameState", "__admin_probe__"), { probe: true }, { merge: true });
+        await deleteDoc(doc(db, "gameState", "__admin_probe__"));
+      },
+    },
+    {
+      label: "gwTeams",
+      run: async () => {
+        const ref = doc(db, "gwTeams", "__admin_probe__");
+        await setDoc(ref, { gameweek: 0, teams: [], probe: true });
+        await deleteDoc(ref);
+      },
+    },
+    {
+      label: "players",
+      run: async () => {
+        const ref = doc(db, "players", "__admin_probe__");
+        await setDoc(ref, { name: "probe", price: 1, runs: 0, available: false, probe: true }, { merge: true });
+        await deleteDoc(ref);
+      },
+    },
+    {
+      label: "teams (other user)",
+      run: async () => {
+        if (!otherTeamUid) throw new Error("skipped — no other saved team in league");
+        await updateDoc(doc(db, "teams", otherTeamUid), { __adminProbe: true });
+        await updateDoc(doc(db, "teams", otherTeamUid), { __adminProbe: deleteField() });
+      },
+    },
+  ];
+
+  for (const { label, run } of probes) {
+    try {
+      await run();
+      lines.push(`${label}: OK`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      lines.push(`${label}: FAILED — ${msg}`);
+    }
+  }
+  return lines;
+}
+
 function savedTeamFromFirestoreDoc(d: { id: string; data: () => Record<string, unknown> }): SavedTeam {
   const raw = d.data();
   const ownerName =
@@ -1002,6 +1075,8 @@ export default function Page() {
   const [pcMatchId, setPcMatchId] = useState("");
   const [pcBusy, setPcBusy] = useState(false);
   const [pcNote, setPcNote] = useState<string | null>(null);
+  const [adminAccessProbe, setAdminAccessProbe] = useState<string | null>(null);
+  const [adminAccessProbing, setAdminAccessProbing] = useState(false);
   const [adminStatsSort, setAdminStatsSort] = useState<{ key: AdminStatsSortKey; dir: "asc" | "desc" }>({
     key: "name",
     dir: "asc",
@@ -1050,27 +1125,30 @@ export default function Page() {
     };
   }, [teamModal]);
 
-  // Firestore: listen to current gameweek
+  // Firestore: listen to current gameweek (after auth — rules require signedIn())
   useEffect(() => {
+    if (!authUser) return;
+    setFsError(null);
     const gsRef = doc(db, "gameState", "current");
     const unsub = onSnapshot(gsRef, (snap) => {
       if (snap.exists()) {
         const data = snap.data();
         setCurrentGameweek(data.currentGameweek ?? 1);
       } else {
-        // First run — initialize with seed data
-        void setDoc(gsRef, { currentGameweek: 1 });
+        setCurrentGameweek(1);
       }
       setFsReady(true);
+      setFsError(null);
     }, (err) => {
-      setFsError(err?.message ?? "Failed to read game state.");
+      setFsError(`gameState: ${err?.message ?? "Failed to read game state."}`);
       setFsReady(true);
     });
     return () => unsub();
-  }, []);
+  }, [authUser]);
 
   // Firestore: listen to players collection (single source of truth)
   useEffect(() => {
+    if (!authUser) return;
     let cancelled = false;
     const gsRef = doc(db, "gameState", "current");
 
@@ -1145,38 +1223,36 @@ export default function Page() {
       }
 
       emptyPlayersSeedInFlightRef.current = false;
-      if (!playersSeededMarkerSentRef.current) {
-        playersSeededMarkerSentRef.current = true;
-        void setDoc(gsRef, { playersSeeded: true }, { merge: true });
-      }
 
       list.sort((a, b) => a.id - b.id);
       setPlayers(list);
       setFsReady(true);
       setFsError(null);
     }, (err) => {
-      setFsError(err?.message ?? "Failed to read players.");
+      setFsError(`players: ${err?.message ?? "Failed to read players."}`);
       setFsReady(true);
     });
     return () => {
       cancelled = true;
       unsub();
     };
-  }, []);
+  }, [authUser]);
 
   // Firestore: listen to teams collection
   useEffect(() => {
+    if (!authUser) return;
     const unsub = onSnapshot(
       collection(db, "teams"),
       (snap) => {
         setTeams(snap.docs.map((d) => savedTeamFromFirestoreDoc(d)));
+        setFsError(null);
       },
       (err) => {
-        setFsError(err?.message ?? "Failed to read teams.");
+        setFsError(`teams: ${err?.message ?? "Failed to read teams."}`);
       },
     );
     return () => unsub();
-  }, []);
+  }, [authUser]);
 
   // Firestore: locked squad snapshots (one doc per completed gameweek)
   useEffect(() => {
@@ -1191,9 +1267,10 @@ export default function Page() {
           if (parsed) list.push(parsed);
         }
         setGwTeamsArchive(list);
+        setFsError(null);
       },
       (err) => {
-        setFsError(err?.message ?? "Failed to read gwTeams.");
+        setFsError(`gwTeams: ${err?.message ?? "Failed to read gwTeams."}`);
       },
     );
     return () => unsub();
@@ -1774,6 +1851,21 @@ export default function Page() {
 
   function adminLogout() { setAdminAuthed(false); }
 
+  async function runAdminAccessProbe() {
+    if (!authUser) return;
+    setAdminAccessProbing(true);
+    setAdminAccessProbe(null);
+    try {
+      const otherUid = teams.find((t) => t.uid !== authUser.uid)?.uid ?? null;
+      const lines = await probeLeagueAdminWrites(authUser, otherUid);
+      setAdminAccessProbe(lines.join("\n"));
+    } catch (e: unknown) {
+      setAdminAccessProbe(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAdminAccessProbing(false);
+    }
+  }
+
   function editLocalPlayer(id: number, patch: Partial<Player>) {
     setLocalPlayers((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
     setUnsavedStats(true);
@@ -2089,8 +2181,11 @@ export default function Page() {
 
     try {
       await runAction("End gameweek", async () => {
+        if (!authUser) throw new Error("Sign in required.");
+        await assertLeagueAdminFirestoreAccess(authUser);
+
         const teamSnapshots: GwTeamSnapshot[] = [];
-        const batch = writeBatch(db);
+        const teamBatch = writeBatch(db);
         for (const team of teams) {
           const weekPts = computeWeekPoints(team, playersByIdForGw, gw);
           const baseline =
@@ -2120,15 +2215,17 @@ export default function Page() {
             transferPenaltyPointsApplied: team.transferPenaltyPointsApplied ?? 0,
             playerJoinedGameweek: team.playerJoinedGameweek ? { ...team.playerJoinedGameweek } : {},
           });
-          batch.update(doc(db, "teams", team.uid), {
+          teamBatch.update(doc(db, "teams", team.uid), {
             cumulativePoints: cumulativeAfter,
             transferBaselinePlayers: [...team.players],
             freeTransfersAtGwStart: nextFree,
             transferPenaltyPointsApplied: 0,
           });
         }
+
+        const playerBatch = writeBatch(db);
         for (const p of updatedPlayers) {
-          batch.update(doc(db, "players", String(p.id)), {
+          playerBatch.update(doc(db, "players", String(p.id)), {
             runs: p.runs,
             fours: p.fours,
             sixes: p.sixes,
@@ -2142,14 +2239,34 @@ export default function Page() {
             history: p.history,
           });
         }
-        batch.set(doc(db, "gwTeams", String(gw)), {
+
+        const finalizeBatch = writeBatch(db);
+        finalizeBatch.set(doc(db, "gwTeams", String(gw)), {
           gameweek: gw,
           endedAt: serverTimestamp(),
-          endedBy: authUser?.uid ?? null,
+          endedBy: authUser.uid,
           teams: teamSnapshots,
         });
-        batch.set(doc(db, "gameState", "current"), { currentGameweek: gw + 1 }, { merge: true });
-        await batch.commit();
+        finalizeBatch.set(doc(db, "gameState", "current"), { currentGameweek: gw + 1 }, { merge: true });
+
+        try {
+          await teamBatch.commit();
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          throw new Error(`teams batch — ${msg}`);
+        }
+        try {
+          await playerBatch.commit();
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          throw new Error(`players batch — ${msg}`);
+        }
+        try {
+          await finalizeBatch.commit();
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          throw new Error(`gwTeams/gameState batch — ${msg}`);
+        }
       });
       clearBuilder();
       setTab("draft");
@@ -2333,7 +2450,7 @@ export default function Page() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
-  if (!authReady || !fsReady) {
+  if (!authReady || (authUser && !fsReady)) {
     return (
       <div className="min-h-screen bg-[#080808] text-white flex items-center justify-center">
         <div className="rounded-2xl bg-white/5 p-6 ring-1 ring-white/10 text-center">
@@ -3178,6 +3295,22 @@ export default function Page() {
                           <code className="rounded bg-black/30 px-1 font-mono text-[11px]">firestore.rules</code> if you have not already.
                         </p>
                         <p className="mt-2 font-mono text-[11px] text-white break-all">UID: {authUser.uid}</p>
+                        <p className="mt-1 font-mono text-[11px] text-sky-200/90 break-all">
+                          Firebase project: {firebaseProjectId}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => void runAdminAccessProbe()}
+                          disabled={adminAccessProbing}
+                          className="mt-3 rounded-xl bg-white/10 px-3 py-2 text-xs font-semibold text-white ring-1 ring-white/15 hover:bg-white/15 disabled:opacity-50"
+                        >
+                          {adminAccessProbing ? "Testing…" : "Test Firestore admin access"}
+                        </button>
+                        {adminAccessProbe ? (
+                          <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-black/30 p-2 font-mono text-[10px] text-sky-100">
+                            {adminAccessProbe}
+                          </pre>
+                        ) : null}
                       </div>
 
                       <div className="rounded-xl bg-white/[0.04] px-4 py-3 text-xs leading-relaxed text-zinc-400 ring-1 ring-white/10">

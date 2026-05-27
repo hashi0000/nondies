@@ -55,7 +55,8 @@ service cloud.firestore {
       allow create: if signedIn()
         && teamId == request.auth.uid
         && request.resource.data.createdBy == request.auth.uid;
-      allow update, delete: if signedIn() && (teamId == request.auth.uid || isLeagueAdmin());
+      // End GW / undo / reset update every manager’s team — needs canManageLeague, not owner-only.
+      allow update, delete: if signedIn() && (teamId == request.auth.uid || canManageLeague());
     }
 
     match /gameState/{docId} {

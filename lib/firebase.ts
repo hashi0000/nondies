@@ -15,3 +15,5 @@ const app = getApps().length ? getApps()[0]! : initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+/** Shown in Admin so you can confirm Console rules match this project. */
+export const firebaseProjectId = firebaseConfig.projectId;

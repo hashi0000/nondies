@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "deploy:rules": "firebase deploy --only firestore:rules --project fantasy-c7815",
     "email:announce": "node tools/sendLeagueAnnouncement.mjs",
     "email:remind:pending": "node tools/sendTeamSelectionReminder.mjs"
   },

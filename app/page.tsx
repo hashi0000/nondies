@@ -2240,15 +2240,6 @@ export default function Page() {
           });
         }
 
-        const finalizeBatch = writeBatch(db);
-        finalizeBatch.set(doc(db, "gwTeams", String(gw)), {
-          gameweek: gw,
-          endedAt: serverTimestamp(),
-          endedBy: authUser.uid,
-          teams: teamSnapshots,
-        });
-        finalizeBatch.set(doc(db, "gameState", "current"), { currentGameweek: gw + 1 }, { merge: true });
-
         try {
           await teamBatch.commit();
         } catch (e: unknown) {
@@ -2262,10 +2253,23 @@ export default function Page() {
           throw new Error(`players batch — ${msg}`);
         }
         try {
-          await finalizeBatch.commit();
+          await setDoc(doc(db, "gwTeams", String(gw)), {
+            gameweek: gw,
+            endedAt: serverTimestamp(),
+            endedBy: authUser.uid,
+            teams: teamSnapshots,
+          });
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : String(e);
-          throw new Error(`gwTeams/gameState batch — ${msg}`);
+          throw new Error(
+            `gwTeams write — ${msg}. In Firebase project "${firebaseProjectId}", open Firestore → Rules and publish rules that include match /gwTeams/{gameweekId} (see firestore.rules in the repo).`,
+          );
+        }
+        try {
+          await setDoc(doc(db, "gameState", "current"), { currentGameweek: gw + 1 }, { merge: true });
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          throw new Error(`gameState write — ${msg}`);
         }
       });
       clearBuilder();

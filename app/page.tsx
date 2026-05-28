@@ -253,7 +253,13 @@ type DraftSortKey =
   | "runOuts"
   | "gwPoints"
   | "seasonPts"
-  | "picked";
+  | "picked"
+  | "batPts"
+  | "bowlPts"
+  | "fieldPts"
+  | "innings"
+  | "notOuts"
+  | "average";
 
 type LatestChatMeta = {
   createdAt: Timestamp;
@@ -1094,6 +1100,36 @@ function AdminStatsSortTh({
   );
 }
 
+function PlayersSortTh({
+  label,
+  colKey,
+  sort,
+  onSort,
+  className,
+  ...thProps
+}: {
+  label: React.ReactNode;
+  colKey: DraftSortKey;
+  sort: { key: DraftSortKey; dir: "asc" | "desc" };
+  onSort: (k: DraftSortKey) => void;
+  className?: string;
+} & React.ThHTMLAttributes<HTMLTableCellElement>) {
+  const active = sort.key === colKey;
+  return (
+    <th className={["px-4 py-3", className].filter(Boolean).join(" ")} {...thProps}>
+      <button
+        type="button"
+        onClick={() => onSort(colKey)}
+        className={["inline-flex items-center gap-1.5 text-xs font-semibold transition",
+          active ? "text-white" : "text-zinc-300 hover:text-white"].join(" ")}
+      >
+        <span>{label}</span>
+        {active ? <span>{sort.dir === "asc" ? "↑" : "↓"}</span> : <ArrowUpDown className="h-3 w-3 opacity-70" />}
+      </button>
+    </th>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Page() {
@@ -1532,13 +1568,67 @@ export default function Page() {
   /** Players tab table (available pool only — same as before). */
   const [playersTabSortKey, setPlayersTabSortKey] = useState<DraftSortKey>("gwPoints");
   const [playersTabSortDir, setPlayersTabSortDir] = useState<"asc" | "desc">("desc");
+  const togglePlayersSort = React.useCallback((key: DraftSortKey) => {
+    setPlayersTabSortKey((prevKey) => {
+      if (prevKey === key) {
+        setPlayersTabSortDir((prevDir) => (prevDir === "asc" ? "desc" : "asc"));
+        return prevKey;
+      }
+      setPlayersTabSortDir(key === "name" || key === "role" || key === "teamTier" ? "asc" : "desc");
+      return key;
+    });
+  }, []);
   const playerPoints = useMemo(
-    () =>
-      players
+    () => {
+      const rows = players
         .filter((p) => p.available)
-        .slice()
-        .sort((a, b) => compareDraftPoolPlayers(a, b, playersTabSortKey, playersTabSortDir, ownership))
-        .map((p) => ({ player: p, season: seasonCricketStatsFromHistory(p.history) })),
+        .map((p) => {
+          const season = seasonCricketStatsFromHistory(p.history);
+          const seasonFantasy = seasonFantasyBreakdownFromHistory(p.history);
+          return {
+            player: p,
+            season,
+            seasonFantasy,
+            seasonPoints: sumSeasonPointsFromHistory(p.history),
+            picked: ownership.get(p.id) ?? 0,
+          };
+        });
+      const mult = playersTabSortDir === "desc" ? -1 : 1;
+      rows.sort((a, b) => {
+        let cmp = 0;
+        switch (playersTabSortKey) {
+          case "id": cmp = a.player.id - b.player.id; break;
+          case "name": cmp = a.player.name.localeCompare(b.player.name); break;
+          case "role": cmp = a.player.role.localeCompare(b.player.role); break;
+          case "teamTier": cmp = a.player.teamTier - b.player.teamTier; break;
+          case "price": cmp = a.player.price - b.player.price; break;
+          case "runs": cmp = a.season.runs - b.season.runs; break;
+          case "fours": cmp = a.season.fours - b.season.fours; break;
+          case "sixes": cmp = a.season.sixes - b.season.sixes; break;
+          case "wickets": cmp = a.season.wickets - b.season.wickets; break;
+          case "maidens": cmp = a.season.maidens - b.season.maidens; break;
+          case "catches": cmp = a.season.catches - b.season.catches; break;
+          case "wkCatches": cmp = a.season.wkCatches - b.season.wkCatches; break;
+          case "stumpings": cmp = a.season.stumpings - b.season.stumpings; break;
+          case "runOuts": cmp = a.season.runOuts - b.season.runOuts; break;
+          case "gwPoints": cmp = a.seasonFantasy.total - b.seasonFantasy.total; break;
+          case "batPts": cmp = a.seasonFantasy.batting - b.seasonFantasy.batting; break;
+          case "bowlPts": cmp = a.seasonFantasy.bowling - b.seasonFantasy.bowling; break;
+          case "fieldPts": cmp = a.seasonFantasy.fielding - b.seasonFantasy.fielding; break;
+          case "seasonPts": cmp = a.seasonPoints - b.seasonPoints; break;
+          case "picked": cmp = a.picked - b.picked; break;
+          case "innings": cmp = a.season.innings - b.season.innings; break;
+          case "notOuts": cmp = a.season.notOuts - b.season.notOuts; break;
+          case "average":
+            cmp = (a.season.average ?? -1) - (b.season.average ?? -1);
+            break;
+          default: cmp = 0;
+        }
+        if (cmp !== 0) return mult * cmp;
+        return a.player.name.localeCompare(b.player.name);
+      });
+      return rows;
+    },
     [players, playersTabSortKey, playersTabSortDir, ownership],
   );
 
@@ -2777,7 +2867,7 @@ export default function Page() {
               <section className="order-2 lg:order-1 lg:col-span-7">
                 <Card>
                   <CardHeader title="Draft pool"
-                    subtitle={`Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — max ${money(BUDGET)}. Σ pts = summed completed gameweeks (for picking form); GW = raw points this gameweek. Your leaderboard only banks weeks you owned a player.`}
+                    subtitle={`Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — max ${money(BUDGET)}. Draft cards show season-to-date stats and Σ points for scouting form. Your leaderboard only banks weeks you owned a player.`}
                     right={
                       <div className="flex max-w-[16rem] flex-col items-end gap-2 sm:max-w-none">
                         <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
@@ -2909,6 +2999,8 @@ export default function Page() {
                         const disabled = locked || !p.available || wouldBust || full || roleFull;
                         const pickCount = ownership.get(p.id) ?? 0;
                         const ownershipPct = teams.length > 0 ? Math.round((pickCount / teams.length) * 100) : 0;
+                        const seasonStats = seasonCricketStatsFromHistory(p.history);
+                        const seasonFantasy = seasonFantasyBreakdownFromHistory(p.history);
 
                         return (
                           <div
@@ -2934,19 +3026,21 @@ export default function Page() {
                                 <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
                                   <span className="font-medium text-zinc-200">{money(p.price)}</span>
                                   <span className="text-zinc-600">•</span>
-                                  <span>{p.didNotBat ? "DNB" : `${p.runs} runs`}</span>
+                                  <span>{seasonStats.runs} runs</span>
                                   <span className="text-zinc-600">•</span>
-                                  <span>{p.wickets} wkts</span>
+                                  <span>{seasonStats.wickets} wkts</span>
                                   <span className="text-zinc-600">•</span>
-                                  <span>{p.maidens} maid</span>
+                                  <span>{seasonStats.innings} inns</span>
                                   <span className="text-zinc-600">•</span>
-                                  <span>{p.catches} ct</span>
+                                  <span>{seasonStats.notOuts} NO</span>
                                   <span className="text-zinc-600">•</span>
                                   <span className="font-medium text-emerald-200">
-                                    Σ {sumSeasonPointsFromHistory(p.history)} pts
+                                    Σ {seasonFantasy.total} pts
                                   </span>
                                   <span className="text-zinc-600">•</span>
-                                  <span className="text-zinc-400">GW {calculatePoints(p)}</span>
+                                  <span className="text-zinc-400">
+                                    Avg {seasonStats.average === null ? "—" : seasonStats.average.toFixed(2)}
+                                  </span>
                                 </div>
                                 <div className="mt-2 flex flex-wrap items-center gap-2">
                                   <Pill tone="amber">{ROLE_LABEL[p.role]}</Pill>
@@ -3399,40 +3493,26 @@ export default function Page() {
                       <table className="min-w-[1380px] w-full border-collapse">
                         <thead className="text-xs font-semibold text-zinc-300">
                           <tr>
-                            <th className="sticky left-0 top-0 z-40 bg-zinc-950 px-4 py-3 text-left shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">
-                              Player
-                            </th>
-                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-left shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Role</th>
-                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-left shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Squad</th>
-                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Price</th>
-                            <th className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 px-4 py-2.5 text-right align-bottom shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">
-                              <div className="text-[10px] font-bold uppercase tracking-wider text-sky-400/90">Batting</div>
-                              <div className="mt-1 text-zinc-200">Runs</div>
-                            </th>
-                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">4s</th>
-                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">6s</th>
-                            <th className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 px-4 py-2.5 text-right align-bottom shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">
-                              <div className="text-[10px] font-bold uppercase tracking-wider text-amber-400/90">Bowling</div>
-                              <div className="mt-1 text-zinc-200">Wkts</div>
-                            </th>
-                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Maid</th>
-                            <th className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 px-4 py-2.5 text-right align-bottom shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">
-                              <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-400/90">Fielding</div>
-                              <div className="mt-1 text-zinc-200">Catches</div>
-                            </th>
-                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">WK c.</th>
-                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Stump.</th>
-                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">RO</th>
-                            <th className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 px-4 py-2.5 text-right align-bottom shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">
-                              <div className="text-[10px] font-bold uppercase tracking-wider text-white/70">Fantasy</div>
-                              <div className="mt-1 text-zinc-200">Bat</div>
-                            </th>
-                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Bowl</th>
-                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" title="Outfield 8× catches + WK + stump + RO bonuses">Fld</th>
-                            <th className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Σ pts</th>
-                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Inns</th>
-                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">NO</th>
-                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Avg</th>
+                            <PlayersSortTh label="Player" colKey="name" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky left-0 top-0 z-40 bg-zinc-950 text-left shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label="Role" colKey="role" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-left shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label="Squad" colKey="teamTier" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-left shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label="Price" colKey="price" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label={<><div className="text-[10px] font-bold uppercase tracking-wider text-sky-400/90">Batting</div><div className="mt-1 text-zinc-200">Runs</div></>} colKey="runs" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 text-right align-bottom shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label="4s" colKey="fours" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label="6s" colKey="sixes" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label={<><div className="text-[10px] font-bold uppercase tracking-wider text-amber-400/90">Bowling</div><div className="mt-1 text-zinc-200">Wkts</div></>} colKey="wickets" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 text-right align-bottom shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label="Maid" colKey="maidens" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label={<><div className="text-[10px] font-bold uppercase tracking-wider text-emerald-400/90">Fielding</div><div className="mt-1 text-zinc-200">Catches</div></>} colKey="catches" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 text-right align-bottom shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label="WK c." colKey="wkCatches" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label="Stump." colKey="stumpings" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label="RO" colKey="runOuts" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label={<><div className="text-[10px] font-bold uppercase tracking-wider text-white/70">Fantasy</div><div className="mt-1 text-zinc-200">Bat</div></>} colKey="batPts" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 text-right align-bottom shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label="Bowl" colKey="bowlPts" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label="Fld" colKey="fieldPts" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label="Σ pts" colKey="seasonPts" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label="Inns" colKey="innings" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label="NO" colKey="notOuts" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label="Avg" colKey="average" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-white/10 text-sm text-zinc-100">

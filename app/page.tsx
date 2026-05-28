@@ -259,7 +259,9 @@ type DraftSortKey =
   | "fieldPts"
   | "innings"
   | "notOuts"
-  | "average";
+  | "average"
+  | "highScore"
+  | "bestBowling";
 
 type LatestChatMeta = {
   createdAt: Timestamp;
@@ -454,7 +456,13 @@ function seasonCricketStatsFromHistory(history: WeekRecord[] | undefined) {
   let runOuts = 0;
   let innings = 0;
   let notOuts = 0;
+  let highScore = 0;
+  let bestBowlingWkts = 0;
+  let bestBowlingMaidens = 0;
   for (const h of history ?? []) {
+    const gwRuns = Number.isFinite(Number(h?.runs)) ? Number(h.runs) : 0;
+    const gwWickets = Number.isFinite(Number(h?.wickets)) ? Number(h.wickets) : 0;
+    const gwMaidens = Number.isFinite(Number(h?.maidens)) ? Number(h.maidens) : 0;
     runs += Number.isFinite(Number(h?.runs)) ? Number(h.runs) : 0;
     fours += Number.isFinite(Number(h?.fours)) ? Number(h.fours) : 0;
     sixes += Number.isFinite(Number(h?.sixes)) ? Number(h.sixes) : 0;
@@ -469,10 +477,32 @@ function seasonCricketStatsFromHistory(history: WeekRecord[] | undefined) {
       innings += 1;
       if (Boolean(h?.notOut)) notOuts += 1;
     }
+    if (gwRuns > highScore) highScore = gwRuns;
+    if (gwWickets > bestBowlingWkts || (gwWickets === bestBowlingWkts && gwMaidens > bestBowlingMaidens)) {
+      bestBowlingWkts = gwWickets;
+      bestBowlingMaidens = gwMaidens;
+    }
   }
   const outs = Math.max(innings - notOuts, 0);
   const average = outs > 0 ? runs / outs : null;
-  return { runs, fours, sixes, wickets, maidens, catches, wkCatches, stumpings, runOuts, innings, notOuts, outs, average };
+  return {
+    runs,
+    fours,
+    sixes,
+    wickets,
+    maidens,
+    catches,
+    wkCatches,
+    stumpings,
+    runOuts,
+    innings,
+    notOuts,
+    outs,
+    average,
+    highScore,
+    bestBowlingWkts,
+    bestBowlingMaidens,
+  };
 }
 
 function seasonFantasyBreakdownFromHistory(history: WeekRecord[] | undefined) {
@@ -1621,6 +1651,13 @@ export default function Page() {
           case "notOuts": cmp = a.season.notOuts - b.season.notOuts; break;
           case "average":
             cmp = (a.season.average ?? -1) - (b.season.average ?? -1);
+            break;
+          case "highScore":
+            cmp = a.season.highScore - b.season.highScore;
+            break;
+          case "bestBowling":
+            cmp = a.season.bestBowlingWkts - b.season.bestBowlingWkts;
+            if (cmp === 0) cmp = a.season.bestBowlingMaidens - b.season.bestBowlingMaidens;
             break;
           default: cmp = 0;
         }
@@ -3463,9 +3500,11 @@ export default function Page() {
                         </optgroup>
                         <optgroup label="Cumulative">
                           <option value="runs">Runs</option>
+                          <option value="highScore">High score (HS)</option>
                           <option value="fours">Fours</option>
                           <option value="sixes">Sixes</option>
                           <option value="wickets">Wickets</option>
+                          <option value="bestBowling">Best bowling (BB)</option>
                           <option value="maidens">Maidens</option>
                           <option value="catches">Catches</option>
                           <option value="wkCatches">WK catches</option>
@@ -3498,9 +3537,11 @@ export default function Page() {
                             <PlayersSortTh label="Squad" colKey="teamTier" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-left shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
                             <PlayersSortTh label="Price" colKey="price" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
                             <PlayersSortTh label={<><div className="text-[10px] font-bold uppercase tracking-wider text-sky-400/90">Batting</div><div className="mt-1 text-zinc-200">Runs</div></>} colKey="runs" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 text-right align-bottom shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label="HS" colKey="highScore" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
                             <PlayersSortTh label="4s" colKey="fours" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
                             <PlayersSortTh label="6s" colKey="sixes" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
                             <PlayersSortTh label={<><div className="text-[10px] font-bold uppercase tracking-wider text-amber-400/90">Bowling</div><div className="mt-1 text-zinc-200">Wkts</div></>} colKey="wickets" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 text-right align-bottom shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
+                            <PlayersSortTh label="BB" colKey="bestBowling" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
                             <PlayersSortTh label="Maid" colKey="maidens" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
                             <PlayersSortTh label={<><div className="text-[10px] font-bold uppercase tracking-wider text-emerald-400/90">Fielding</div><div className="mt-1 text-zinc-200">Catches</div></>} colKey="catches" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 text-right align-bottom shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
                             <PlayersSortTh label="WK c." colKey="wkCatches" sort={{ key: playersTabSortKey, dir: playersTabSortDir }} onSort={togglePlayersSort} className="sticky top-0 z-20 bg-zinc-950 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" />
@@ -3525,9 +3566,11 @@ export default function Page() {
                                 <td className="px-4 py-3 text-zinc-300">{TEAM_TIER_SHORT[p.teamTier]}</td>
                                 <td className="px-4 py-3 text-right text-zinc-200">{money(p.price)}</td>
                                 <td className="border-l border-white/10 px-4 py-3 text-right text-zinc-200">{season.runs}</td>
+                                <td className="px-4 py-3 text-right text-zinc-200">{season.highScore}</td>
                                 <td className="px-4 py-3 text-right text-zinc-200">{season.fours}</td>
                                 <td className="px-4 py-3 text-right text-zinc-200">{season.sixes}</td>
                                 <td className="border-l border-white/10 px-4 py-3 text-right text-zinc-200">{season.wickets}</td>
+                                <td className="px-4 py-3 text-right text-zinc-200">{season.bestBowlingWkts}/{season.bestBowlingMaidens}</td>
                                 <td className="px-4 py-3 text-right text-zinc-200">{season.maidens}</td>
                                 <td className="border-l border-white/10 px-4 py-3 text-right text-zinc-200">{season.catches}</td>
                                 <td className="px-4 py-3 text-right text-zinc-200">{season.wkCatches}</td>

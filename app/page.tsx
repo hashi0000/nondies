@@ -3341,7 +3341,7 @@ export default function Page() {
               <Card>
                 <CardHeader
                   title="Player points"
-                  subtitle="GW = stats entered for the current gameweek. Σ = season sum across completed gameweeks. Bat / Bowl / Fld columns are fantasy points from this week only — Fld is outfield catches plus WK, stumpings and run-outs (captain boosts apply on your team leaderboard only, not here)."
+                  subtitle="Cumulative season view. Bat / Bowl / Fld are season fantasy points (Fld = outfield catches + WK catches + stumpings + run-outs). Captain boosts apply on the team leaderboard, not here."
                 />
                 <CardBody>
                   <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -3396,7 +3396,7 @@ export default function Page() {
                   </div>
                   <div className="relative overflow-hidden rounded-2xl ring-1 ring-white/10">
                     <div className="max-h-[min(75vh,52rem)] overflow-auto bg-zinc-950/40">
-                      <table className="min-w-[1520px] w-full border-collapse">
+                      <table className="min-w-[1380px] w-full border-collapse">
                         <thead className="text-xs font-semibold text-zinc-300">
                           <tr>
                             <th className="sticky left-0 top-0 z-40 bg-zinc-950 px-4 py-3 text-left shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">
@@ -3424,18 +3424,15 @@ export default function Page() {
                             <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Stump.</th>
                             <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">RO</th>
                             <th className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 px-4 py-2.5 text-right align-bottom shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">
-                              <div className="text-[10px] font-bold uppercase tracking-wider text-white/70">GW fantasy</div>
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-white/70">Fantasy</div>
                               <div className="mt-1 text-zinc-200">Bat</div>
                             </th>
                             <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Bowl</th>
                             <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" title="Outfield 8× catches + WK + stump + RO bonuses">Fld</th>
                             <th className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Σ pts</th>
-                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Σ runs</th>
-                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Σ wkts</th>
                             <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Inns</th>
                             <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">NO</th>
                             <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Avg</th>
-                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Fantasy pts</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-white/10 text-sm text-zinc-100">
@@ -3462,14 +3459,11 @@ export default function Page() {
                                 <td className="border-l border-white/10 px-4 py-3 text-right font-semibold text-emerald-200">
                                   {sumSeasonPointsFromHistory(p.history)}
                                 </td>
-                                <td className="px-4 py-3 text-right font-semibold text-zinc-100">{season.runs}</td>
-                                <td className="px-4 py-3 text-right font-semibold text-zinc-100">{season.wickets}</td>
                                 <td className="px-4 py-3 text-right text-zinc-300">{season.innings}</td>
                                 <td className="px-4 py-3 text-right text-zinc-300">{season.notOuts}</td>
                                 <td className="px-4 py-3 text-right font-semibold text-sky-200">
                                   {season.average == null ? "—" : season.average.toFixed(2)}
                                 </td>
-                                <td className="px-4 py-3 text-right font-bold text-white">{seasonFantasy.total}</td>
                               </tr>
                             );
                           })}

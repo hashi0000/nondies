@@ -12,6 +12,13 @@ import {
   SQUAD_ROLES,
   SQUAD_SIZE,
 } from "@/lib/leagueConfig";
+import {
+  POINTS_PER_MAIDEN,
+  POINTS_PER_WICKET,
+  RUN_MILESTONE_BONUS,
+  WICKET_HAUL_BONUS,
+  fantasyPointsBreakdown,
+} from "@/lib/fantasyPoints";
 
 export const metadata = {
   title: "How to Play — Nondies Fantasy League",
@@ -441,8 +448,8 @@ export default function RulesPage() {
                       ["1 run scored", <span key="r" className="font-bold text-white">+1 pt</span>],
                       ["1 four hit", <span key="f4" className="font-bold text-white">+1 pt</span>],
                       ["1 six hit", <span key="f6" className="font-bold text-white">+2 pts</span>],
-                      ["1 wicket taken", <span key="w" className="font-bold text-white">+16 pts</span>],
-                      ["1 maiden over", <span key="m" className="font-bold text-white">+4 pts</span>],
+                      ["1 wicket taken", <span key="w" className="font-bold text-white">+{POINTS_PER_WICKET} pts</span>],
+                      ["1 maiden over", <span key="m" className="font-bold text-white">+{POINTS_PER_MAIDEN} pts</span>],
                     ]}
                   />
                 </Card>
@@ -453,14 +460,14 @@ export default function RulesPage() {
                   <Table
                     headers={["Milestone", "Bonus", "Example"]}
                     rows={[
-                      ["3+ wickets", <span key="wb3" className="font-bold text-white">+8 pts</span>, ""],
-                      ["4+ wickets", <span key="wb4" className="font-bold text-white">+16 pts</span>, <span key="wb4e" className="text-zinc-300">4 wickets, 1 maiden → 64 + 4 + 16 = <strong className="text-white">84 pts</strong></span>],
-                      ["5+ wickets", <span key="wb5" className="font-bold text-white">+25 pts</span>, <span key="wb5e" className="text-zinc-300">5 wickets, 2 maidens → 80 + 8 + 25 = <strong className="text-white">113 pts</strong></span>],
-                      ["6+ wickets", <span key="wb6" className="font-bold text-white">+35 pts</span>, ""],
-                      ["7+ wickets", <span key="wb7" className="font-bold text-white">+46 pts</span>, ""],
-                      ["8+ wickets", <span key="wb8" className="font-bold text-white">+57 pts</span>, ""],
-                      ["9+ wickets", <span key="wb9" className="font-bold text-white">+68 pts</span>, <span key="wb9e" className="text-zinc-300">9 wickets, 3 maidens → 144 + 12 + 68 = <strong className="text-white">224 pts</strong></span>],
-                      ["10 wickets", <span key="wb10" className="font-bold text-white">+80 pts</span>, ""],
+                      ["3+ wickets", <span key="wb3" className="font-bold text-white">+{WICKET_HAUL_BONUS.at3} pts</span>, ""],
+                      ["4+ wickets", <span key="wb4" className="font-bold text-white">+{WICKET_HAUL_BONUS.at4} pts</span>, <span key="wb4e" className="text-zinc-300">4 wickets, 2 maidens → {4 * POINTS_PER_WICKET} + {2 * POINTS_PER_MAIDEN} + {WICKET_HAUL_BONUS.at4} = <strong className="text-white">{fantasyPointsBreakdown({ runs: 0, wickets: 4, maidens: 2, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0 }).bowling} pts</strong></span>],
+                      ["5+ wickets", <span key="wb5" className="font-bold text-white">+{WICKET_HAUL_BONUS.at5} pts</span>, <span key="wb5e" className="text-zinc-300">5 wickets, 2 maidens → {5 * POINTS_PER_WICKET} + {2 * POINTS_PER_MAIDEN} + {WICKET_HAUL_BONUS.at5} = <strong className="text-white">{fantasyPointsBreakdown({ runs: 0, wickets: 5, maidens: 2, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0 }).bowling} pts</strong></span>],
+                      ["6+ wickets", <span key="wb6" className="font-bold text-white">+{WICKET_HAUL_BONUS.at6} pts</span>, ""],
+                      ["7+ wickets", <span key="wb7" className="font-bold text-white">+{WICKET_HAUL_BONUS.at7} pts</span>, ""],
+                      ["8+ wickets", <span key="wb8" className="font-bold text-white">+{WICKET_HAUL_BONUS.at8} pts</span>, ""],
+                      ["9+ wickets", <span key="wb9" className="font-bold text-white">+{WICKET_HAUL_BONUS.at9} pts</span>, ""],
+                      ["10 wickets", <span key="wb10" className="font-bold text-white">+{WICKET_HAUL_BONUS.at10} pts</span>, ""],
                     ]}
                   />
                 </Card>
@@ -471,10 +478,10 @@ export default function RulesPage() {
                   <Table
                     headers={["Milestone", "Bonus", "Example"]}
                     rows={[
-                      ["25+ runs",  <span key="a" className="font-bold text-white">+10 pts</span>,  ""],
-                      ["50+ runs",  <span key="b" className="font-bold text-white">+16 pts</span>, <span key="c" className="text-zinc-300">50 runs with 4x4 and 1x6 → 50 + 4 + 2 + 16 = <strong className="text-white">72 pts</strong> (before C/VC)</span>],
-                      ["75+ runs",  <span key="d" className="font-bold text-white">+18 pts</span>, ""],
-                      ["100+ runs", <span key="e" className="font-bold text-white">+25 pts</span>, <span key="f" className="text-zinc-300">100 runs with 8x4 and 2x6 → 100 + 8 + 4 + 25 = <strong className="text-white">137 pts</strong></span>],
+                      ["25+ runs",  <span key="a" className="font-bold text-white">+{RUN_MILESTONE_BONUS.at25} pts</span>,  ""],
+                      ["50+ runs",  <span key="b" className="font-bold text-white">+{RUN_MILESTONE_BONUS.at50} pts</span>, <span key="c" className="text-zinc-300">50 runs with 4x4 and 1x6 → 50 + 4 + 2 + {RUN_MILESTONE_BONUS.at50} = <strong className="text-white">{50 + 4 + 2 + RUN_MILESTONE_BONUS.at50} pts</strong> (before C/VC)</span>],
+                      ["75+ runs",  <span key="d" className="font-bold text-white">+{RUN_MILESTONE_BONUS.at75} pts</span>, ""],
+                      ["100+ runs", <span key="e" className="font-bold text-white">+{RUN_MILESTONE_BONUS.at100} pts</span>, <span key="f" className="text-zinc-300">100 runs with 8x4 and 2x6 → 100 + 8 + 4 + {RUN_MILESTONE_BONUS.at100} = <strong className="text-white">{100 + 8 + 4 + RUN_MILESTONE_BONUS.at100} pts</strong></span>],
                     ]}
                   />
                 </Card>
@@ -495,6 +502,38 @@ export default function RulesPage() {
                   />
                 </Card>
 
+                <Card>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-1">Balanced “great week” targets</div>
+                  <p className="text-xs text-zinc-500 mb-3">
+                    Scoring is calibrated so a standout batting or bowling return lands in a similar band (~90–115 pts before captain/vice), not so hauls always beat fifties.
+                  </p>
+                  <Table
+                    headers={["Type", "Example stats", "Fantasy pts"]}
+                    rows={[
+                      [
+                        "Great batter",
+                        <span key="gb-s" className="text-zinc-300">58 runs, 7×4, 2×6</span>,
+                        <span key="gb-p" className="font-bold text-white">{fantasyPointsBreakdown({ runs: 58, fours: 7, sixes: 2, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0 }).batting} pts</span>,
+                      ],
+                      [
+                        "Great bowler",
+                        <span key="gl-s" className="text-zinc-300">4 wickets, 2 maidens</span>,
+                        <span key="gl-p" className="font-bold text-white">{fantasyPointsBreakdown({ runs: 0, wickets: 4, maidens: 2, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0 }).bowling} pts</span>,
+                      ],
+                      [
+                        "Match-winning batter",
+                        <span key="mb-s" className="text-zinc-300">75 runs, 10×4, 2×6</span>,
+                        <span key="mb-p" className="font-bold text-white">{fantasyPointsBreakdown({ runs: 75, fours: 10, sixes: 2, wickets: 0, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0 }).batting} pts</span>,
+                      ],
+                      [
+                        "Match-winning bowler",
+                        <span key="ml-s" className="text-zinc-300">5 wickets, 2 maidens</span>,
+                        <span key="ml-p" className="font-bold text-white">{fantasyPointsBreakdown({ runs: 0, wickets: 5, maidens: 2, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0 }).bowling} pts</span>,
+                      ],
+                    ]}
+                  />
+                </Card>
+
                 {/* Worked examples */}
                 <Card>
                   <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-3">Worked examples</div>
@@ -503,20 +542,20 @@ export default function RulesPage() {
                       {
                         label: "Batter",
                         stats: "64 runs (7x4, 2x6), 1 catch",
-                        calc: "64 + 7 + 4 + 10 (50 bonus) + 8 (catch)",
-                        total: "93 pts",
+                        calc: `64 + 7 + 4 + ${RUN_MILESTONE_BONUS.at50} (50 bonus) + 8 (catch)`,
+                        total: `${fantasyPointsBreakdown({ runs: 64, fours: 7, sixes: 2, wickets: 0, catches: 1, wkCatches: 0, stumpings: 0, runOuts: 0 }).total} pts`,
                       },
                       {
                         label: "Bowler",
                         stats: "4 wickets, 2 maidens, 0 runs",
-                        calc: "4 × 16 + 2 × 4 + 16 (4w bonus)",
-                        total: "88 pts",
+                        calc: `4 × ${POINTS_PER_WICKET} + 2 × ${POINTS_PER_MAIDEN} + ${WICKET_HAUL_BONUS.at4} (4w bonus)`,
+                        total: `${fantasyPointsBreakdown({ runs: 0, wickets: 4, maidens: 2, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0 }).bowling} pts`,
                       },
                       {
                         label: "All-rounder",
                         stats: "45 runs, 2 wickets",
-                        calc: "45 + 5 (25 bonus) + 2 × 16",
-                        total: "82 pts",
+                        calc: `45 + ${RUN_MILESTONE_BONUS.at25} (25 bonus) + 2 × ${POINTS_PER_WICKET}`,
+                        total: `${fantasyPointsBreakdown({ runs: 45, wickets: 2, catches: 0, wkCatches: 0, stumpings: 0, runOuts: 0 }).total} pts`,
                       },
                     ].map((ex) => (
                       <div key={ex.label} className="rounded-xl bg-white/5 p-3 ring-1 ring-white/8">
@@ -717,7 +756,7 @@ export default function RulesPage() {
                   },
                   {
                     title: "Captain the batter, not the bowler",
-                    body: "Batters and bowlers are now more level: boundary and run milestones help batters, while maidens plus wicket-haul bonuses lift bowlers with big spells.",
+                    body: "A fifty and a four-wicket spell score in the same ballpark — pick your captain on form, not only on role.",
                   },
                   {
                     title: "Watch ownership",

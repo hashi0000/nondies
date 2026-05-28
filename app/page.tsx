@@ -44,6 +44,7 @@ import {
   writeBatch,
 } from "firebase/firestore";
 import { auth, db, firebaseProjectId } from "@/lib/firebase";
+import { PlayerCompareCharts } from "@/components/PlayerCompareCharts";
 import { calculatePoints, clampNonNegativeInt, fantasyPointsBreakdown } from "@/lib/fantasyPoints";
 import {
   BUDGET,
@@ -3475,10 +3476,12 @@ export default function Page() {
                   subtitle="Cumulative season view. Bat / Bowl / Fld are season fantasy points (Fld = outfield catches + WK catches + stumpings + run-outs). Captain boosts apply on the team leaderboard, not here."
                 />
                 <CardBody>
+                  <PlayerCompareCharts players={players} currentGameweek={currentGameweek} />
+
                   <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                     <div className="text-xs text-zinc-400">
                       <span className="font-semibold text-zinc-200">Scoring:</span>{" "}
-                      1 run = 1 point, 4 = +1, 6 = +2, 25/50/75/100 run bonuses = +10/+16/+18/+25, 1 wicket = 16 points, maiden = +4, wicket-haul bonuses from 3 wickets (+8) up to 10 wickets (+80), outfield catch = 8 points, wicketkeeping catch = 10, stumping = 12, run-out involvement = 10.{" "}
+                      1 run = 1 pt, 4 = +1, 6 = +2, run milestones 25/50/75/100 = +15/+26/+32/+42, 1 wicket = 15 pts, maiden = +4, haul bonuses 3–10 wkts = +8 to +60, outfield catch = 8, WK catch = 10, stumping = 12, run-out = 10. Bat and bowl tuned so a great week in either discipline lands near ~90–115 pts.{" "}
                       <span className="text-zinc-500">
                         Column groups separate roster, batting stats, bowling stats, fielding &amp; WK stats, then GW fantasy breakdown (Bat / Bowl / Fld) before season Σ and total GW.
                       </span>

@@ -2625,7 +2625,7 @@ export default function Page() {
         <div className="absolute left-1/2 top-0 -translate-x-1/2 h-[600px] w-[900px] rounded-full bg-red-800/8 blur-[140px]" />
       </div>
 
-      <div className="relative mx-auto w-full max-w-6xl px-4 pb-24 pt-6 sm:px-6 sm:pb-10">
+      <div className="relative mx-auto w-full max-w-5xl px-3 pb-24 pt-6 sm:px-4 sm:pb-10">
 
         {/* ── Header ── */}
         <header className="rounded-2xl border border-white/8 bg-zinc-900/60 px-4 py-4 backdrop-blur-md sm:px-6 sm:py-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -3399,7 +3399,7 @@ export default function Page() {
 
           {/* ── Admin tab ── */}
           {tab === "admin" ? (
-            <section className="lg:col-span-12">
+            <section className="lg:col-span-12 mx-auto w-full max-w-5xl">
               <Card>
                 <CardHeader title="Admin"
                   subtitle="The draft pool and leaderboard read live from Firestore for every signed-in user. Add/delete player and bulk availability apply immediately. Stat cells update everyone only after you click Save stats — End gameweek uses the numbers currently in this table (including unsaved cells)."
@@ -3439,9 +3439,9 @@ export default function Page() {
                       </div>
                     </div>
                   ) : (
-                    <div className="grid gap-6">
+                    <div className="grid gap-6 overflow-x-hidden">
 
-                      <div className="rounded-2xl bg-sky-500/10 px-4 py-3 text-xs leading-relaxed text-sky-100 ring-1 ring-sky-500/25">
+                      <div className="rounded-2xl bg-sky-500/10 px-4 py-3 text-xs leading-relaxed text-sky-100 ring-1 ring-sky-500/25 break-words">
                         <div className="font-semibold text-sky-50">Firebase league admin (required for End GW, Save stats, reset)</div>
                         <p className="mt-1 text-sky-200/90">
                           The PIN only unlocks this screen. Firestore also needs your account marked as league admin: in{" "}
@@ -3480,7 +3480,7 @@ export default function Page() {
                       </div>
 
                       {/* Action buttons */}
-                      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                         <button type="button" onClick={() => void endGameweek()}
                           className="rounded-2xl bg-red-600 px-4 py-3 text-sm font-bold text-white ring-1 ring-red-500/40 hover:bg-red-500">
                           End GW{currentGameweek} &amp; carry over points

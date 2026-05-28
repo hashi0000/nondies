@@ -99,6 +99,7 @@ async function resetAllPlayerDocumentsStats() {
       stumpings: 0,
       runOuts: 0,
       didNotBat: false,
+      notOut: false,
       history: [],
     });
     ops += 1;
@@ -122,6 +123,8 @@ type WeekRecord = {
   runOuts: number;
   points: number;
   didNotBat?: boolean;
+  /** True when batter remained not out this gameweek. */
+  notOut?: boolean;
 };
 
 /** 1 = 1st XI (premium prices), 2 = 2nd XI (value picks). */
@@ -148,6 +151,8 @@ type Player = {
   history: WeekRecord[];
   /** Did not bat this GW — no batting fantasy from runs/4s/6s; show DNB in lists & form (bowling/fielding still score). */
   didNotBat?: boolean;
+  /** Batter remained not out in this GW. Used for batting average on player leaderboard. */
+  notOut?: boolean;
 };
 
 type SavedTeam = {
@@ -198,6 +203,7 @@ type SnapshotPlayerRow = {
   stumpings?: number;
   runOuts?: number;
   didNotBat?: boolean;
+  notOut?: boolean;
 };
 
 type BuilderState = {
@@ -402,7 +408,8 @@ function snapshotStatDiffCount(curr: SnapshotPlayerRow[] | undefined, prev: Snap
       Number(p.catches ?? 0) !== Number(q.catches ?? 0) ||
       Number(p.wkCatches ?? 0) !== Number(q.wkCatches ?? 0) ||
       Number(p.stumpings ?? 0) !== Number(q.stumpings ?? 0) ||
-      Number(p.runOuts ?? 0) !== Number(q.runOuts ?? 0);
+      Number(p.runOuts ?? 0) !== Number(q.runOuts ?? 0) ||
+      Boolean(p.notOut) !== Boolean(q.notOut);
     if (diff) changed += 1;
   }
   return changed;
@@ -427,6 +434,25 @@ function sumSeasonPointsFromHistory(history: WeekRecord[] | undefined) {
     if (Number.isFinite(n)) s += n;
   }
   return Math.round(s * 10) / 10;
+}
+
+function seasonCricketStatsFromHistory(history: WeekRecord[] | undefined) {
+  let runs = 0;
+  let wickets = 0;
+  let innings = 0;
+  let notOuts = 0;
+  for (const h of history ?? []) {
+    runs += Number.isFinite(Number(h?.runs)) ? Number(h.runs) : 0;
+    wickets += Number.isFinite(Number(h?.wickets)) ? Number(h.wickets) : 0;
+    const dnb = Boolean(h?.didNotBat);
+    if (!dnb) {
+      innings += 1;
+      if (Boolean(h?.notOut)) notOuts += 1;
+    }
+  }
+  const outs = Math.max(innings - notOuts, 0);
+  const average = outs > 0 ? runs / outs : null;
+  return { runs, wickets, innings, notOuts, outs, average };
 }
 
 /** Clone for post-save reconciliation with Firestore snapshots (avoids stale-cache overwrites). */
@@ -455,6 +481,7 @@ function firestorePlayerMatchesAdminSnapshot(fs: Player, committed: Player): boo
     fs.stumpings === committed.stumpings &&
     fs.runOuts === committed.runOuts &&
     Boolean(fs.didNotBat) === Boolean(committed.didNotBat) &&
+    Boolean(fs.notOut) === Boolean(committed.notOut) &&
     JSON.stringify(fs.history) === JSON.stringify(committed.history)
   );
 }
@@ -1190,6 +1217,7 @@ export default function Page() {
             runOuts: Number(data.runOuts ?? 0),
             available: Boolean(data.available ?? true),
             didNotBat: Boolean(data.didNotBat),
+            notOut: Boolean(data.notOut),
             history: Array.isArray(data.history) ? data.history : [],
           } satisfies Player;
         })
@@ -1225,6 +1253,7 @@ export default function Page() {
                 wkCatches: p.wkCatches,
                 stumpings: p.stumpings,
                 runOuts: p.runOuts,
+                notOut: Boolean(p.notOut),
                 available: p.available,
               });
             }
@@ -1480,7 +1509,7 @@ export default function Page() {
         .filter((p) => p.available)
         .slice()
         .sort((a, b) => compareDraftPoolPlayers(a, b, playersTabSortKey, playersTabSortDir, ownership))
-        .map((p) => ({ player: p, points: calculatePoints(p) })),
+        .map((p) => ({ player: p, points: calculatePoints(p), season: seasonCricketStatsFromHistory(p.history) })),
     [players, playersTabSortKey, playersTabSortDir, ownership],
   );
 
@@ -1918,7 +1947,7 @@ export default function Page() {
     setLocalPlayers((prev) =>
       prev.map((p) => {
         if (played.has(p.id)) {
-          return { ...p, didNotBat: false };
+          return { ...p, didNotBat: false, notOut: false };
         }
         return {
           ...p,
@@ -1932,6 +1961,7 @@ export default function Page() {
           stumpings: 0,
           runOuts: 0,
           didNotBat: true,
+          notOut: false,
         };
       }),
     );
@@ -1954,6 +1984,7 @@ export default function Page() {
         stumpings: 0,
         runOuts: 0,
         didNotBat: false,
+        notOut: false,
       })),
     );
     setUnsavedStats(true);
@@ -2009,6 +2040,7 @@ export default function Page() {
             stumpings: stats.stumpings,
             runOuts: stats.runOuts,
             didNotBat: false,
+            notOut: false,
           };
         }),
       );
@@ -2051,6 +2083,7 @@ export default function Page() {
             stumpings: p.stumpings,
             runOuts: p.runOuts,
             didNotBat: Boolean(p.didNotBat),
+            notOut: Boolean(p.notOut),
             available: p.available,
             history: p.history ?? [],
           })),
@@ -2075,6 +2108,7 @@ export default function Page() {
               stumpings: p.stumpings,
               runOuts: p.runOuts,
               didNotBat: Boolean(p.didNotBat),
+              notOut: Boolean(p.notOut),
               available: p.available,
               history: p.history ?? [],
             },
@@ -2136,6 +2170,7 @@ export default function Page() {
               stumpings: clampNonNegativeInt(Number(raw?.stumpings ?? 0)),
               runOuts: clampNonNegativeInt(Number(raw?.runOuts ?? 0)),
               didNotBat: Boolean(raw?.didNotBat),
+              notOut: Boolean(raw?.notOut),
               available: Boolean(raw?.available),
               history: Array.isArray(raw?.history) ? raw.history : [],
             },
@@ -2172,6 +2207,7 @@ export default function Page() {
       stumpings: 0,
       runOuts: 0,
       available: true,
+      notOut: false,
       history: [],
     };
     const updated = [...localPlayers, newPlayer];
@@ -2194,6 +2230,7 @@ export default function Page() {
         wkCatches: 0,
         stumpings: 0,
         runOuts: 0,
+        notOut: false,
         available: true,
         history: [],
       }),
@@ -2254,6 +2291,7 @@ export default function Page() {
           runOuts: p.runOuts,
           points: calculatePoints(p),
           ...(p.didNotBat ? { didNotBat: true as const } : {}),
+          ...(p.notOut ? { notOut: true as const } : {}),
         },
       ],
       runs: 0,
@@ -2266,6 +2304,7 @@ export default function Page() {
       stumpings: 0,
       runOuts: 0,
       didNotBat: false,
+      notOut: false,
     }));
 
     try {
@@ -2332,6 +2371,7 @@ export default function Page() {
             stumpings: p.stumpings,
             runOuts: p.runOuts,
             didNotBat: false,
+            notOut: false,
             history: p.history,
           });
         }
@@ -2477,6 +2517,7 @@ export default function Page() {
             stumpings: rec.stumpings,
             runOuts: rec.runOuts,
             didNotBat: Boolean(rec.didNotBat),
+            notOut: Boolean(rec.notOut),
             history: newHist,
           });
         }
@@ -3318,7 +3359,7 @@ export default function Page() {
                   </div>
                   <div className="relative overflow-hidden rounded-2xl ring-1 ring-white/10">
                     <div className="max-h-[min(75vh,52rem)] overflow-auto bg-zinc-950/40">
-                      <table className="min-w-[1320px] w-full border-collapse">
+                      <table className="min-w-[1520px] w-full border-collapse">
                         <thead className="text-xs font-semibold text-zinc-300">
                           <tr>
                             <th className="sticky left-0 top-0 z-40 bg-zinc-950 px-4 py-3 text-left shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">
@@ -3352,11 +3393,16 @@ export default function Page() {
                             <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Bowl</th>
                             <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]" title="Outfield 8× catches + WK + stump + RO bonuses">Fld</th>
                             <th className="sticky top-0 z-20 border-l border-white/15 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Σ pts</th>
+                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Σ runs</th>
+                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Σ wkts</th>
+                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Inns</th>
+                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">NO</th>
+                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Avg</th>
                             <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">GW pts</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-white/10 text-sm text-zinc-100">
-                          {playerPoints.map(({ player: p, points }) => {
+                          {playerPoints.map(({ player: p, points, season }) => {
                             const br = fantasyPointsBreakdown(p);
                             const fldPts = br.fieldingOutfield + br.keeper;
                             return (
@@ -3365,9 +3411,7 @@ export default function Page() {
                                 <td className="px-4 py-3 text-zinc-300">{ROLE_LABEL[p.role]}</td>
                                 <td className="px-4 py-3 text-zinc-300">{TEAM_TIER_SHORT[p.teamTier]}</td>
                                 <td className="px-4 py-3 text-right text-zinc-200">{money(p.price)}</td>
-                                <td className="border-l border-white/10 px-4 py-3 text-right text-zinc-200">
-                                  {p.didNotBat ? <span className="text-sky-300/90">DNB</span> : p.runs}
-                                </td>
+                                <td className="border-l border-white/10 px-4 py-3 text-right text-zinc-200">{p.runs}</td>
                                 <td className="px-4 py-3 text-right text-zinc-200">{p.fours}</td>
                                 <td className="px-4 py-3 text-right text-zinc-200">{p.sixes}</td>
                                 <td className="border-l border-white/10 px-4 py-3 text-right text-zinc-200">{p.wickets}</td>
@@ -3376,13 +3420,18 @@ export default function Page() {
                                 <td className="px-4 py-3 text-right text-zinc-200">{p.wkCatches}</td>
                                 <td className="px-4 py-3 text-right text-zinc-200">{p.stumpings}</td>
                                 <td className="px-4 py-3 text-right text-zinc-200">{p.runOuts}</td>
-                                <td className="border-l border-white/10 px-4 py-3 text-right font-medium text-sky-200/95">
-                                  {p.didNotBat ? <span className="text-zinc-500">—</span> : br.batting}
-                                </td>
+                                <td className="border-l border-white/10 px-4 py-3 text-right font-medium text-sky-200/95">{br.batting}</td>
                                 <td className="px-4 py-3 text-right font-medium text-amber-200/95">{br.bowling}</td>
                                 <td className="px-4 py-3 text-right font-medium text-emerald-200/95">{fldPts}</td>
                                 <td className="border-l border-white/10 px-4 py-3 text-right font-semibold text-emerald-200">
                                   {sumSeasonPointsFromHistory(p.history)}
+                                </td>
+                                <td className="px-4 py-3 text-right font-semibold text-zinc-100">{season.runs}</td>
+                                <td className="px-4 py-3 text-right font-semibold text-zinc-100">{season.wickets}</td>
+                                <td className="px-4 py-3 text-right text-zinc-300">{season.innings}</td>
+                                <td className="px-4 py-3 text-right text-zinc-300">{season.notOuts}</td>
+                                <td className="px-4 py-3 text-right font-semibold text-sky-200">
+                                  {season.average == null ? "—" : season.average.toFixed(2)}
                                 </td>
                                 <td className="px-4 py-3 text-right font-bold text-white">{points}</td>
                               </tr>
@@ -3916,24 +3965,50 @@ export default function Page() {
                                         variant="field"
                                         value={p.runs}
                                         disabled={Boolean(p.didNotBat)}
-                                        onChange={(v) => editLocalPlayer(p.id, { runs: v, ...(v > 0 ? { didNotBat: false } : {}) })}
+                                        onChange={(v) =>
+                                          editLocalPlayer(p.id, {
+                                            runs: v,
+                                            ...(v > 0 ? { didNotBat: false } : {}),
+                                          })
+                                        }
                                         className="text-center"
                                       />
-                                      <label className="flex cursor-pointer items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-sky-300/90">
-                                        <input
-                                          type="checkbox"
-                                          checked={Boolean(p.didNotBat)}
-                                          onChange={(e) => {
-                                            const on = e.target.checked;
-                                            editLocalPlayer(
-                                              p.id,
-                                              on ? { didNotBat: true, runs: 0, fours: 0, sixes: 0 } : { didNotBat: false },
-                                            );
-                                          }}
-                                          className="h-3.5 w-3.5 rounded border-white/20 bg-white/10 text-sky-500 focus:ring-sky-500/50"
-                                        />
-                                        DNB
-                                      </label>
+                                      <div className="flex items-center gap-2">
+                                        <label className="flex cursor-pointer items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-sky-300/90">
+                                          <input
+                                            type="checkbox"
+                                            checked={Boolean(p.didNotBat)}
+                                            onChange={(e) => {
+                                              const on = e.target.checked;
+                                              editLocalPlayer(
+                                                p.id,
+                                                on
+                                                  ? { didNotBat: true, notOut: false, runs: 0, fours: 0, sixes: 0 }
+                                                  : { didNotBat: false },
+                                              );
+                                            }}
+                                            className="h-3.5 w-3.5 rounded border-white/20 bg-white/10 text-sky-500 focus:ring-sky-500/50"
+                                          />
+                                          DNB
+                                        </label>
+                                        <label className="flex cursor-pointer items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-300/90">
+                                          <input
+                                            type="checkbox"
+                                            checked={Boolean(p.notOut)}
+                                            disabled={Boolean(p.didNotBat)}
+                                            onChange={(e) =>
+                                              editLocalPlayer(
+                                                p.id,
+                                                e.target.checked
+                                                  ? { notOut: true, didNotBat: false }
+                                                  : { notOut: false },
+                                              )
+                                            }
+                                            className="h-3.5 w-3.5 rounded border-white/20 bg-white/10 text-emerald-500 focus:ring-emerald-500/50"
+                                          />
+                                          NO
+                                        </label>
+                                      </div>
                                     </div>
                                   </td>
                                   <td className="px-2 py-3 align-middle">

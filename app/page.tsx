@@ -438,12 +438,26 @@ function sumSeasonPointsFromHistory(history: WeekRecord[] | undefined) {
 
 function seasonCricketStatsFromHistory(history: WeekRecord[] | undefined) {
   let runs = 0;
+  let fours = 0;
+  let sixes = 0;
   let wickets = 0;
+  let maidens = 0;
+  let catches = 0;
+  let wkCatches = 0;
+  let stumpings = 0;
+  let runOuts = 0;
   let innings = 0;
   let notOuts = 0;
   for (const h of history ?? []) {
     runs += Number.isFinite(Number(h?.runs)) ? Number(h.runs) : 0;
+    fours += Number.isFinite(Number(h?.fours)) ? Number(h.fours) : 0;
+    sixes += Number.isFinite(Number(h?.sixes)) ? Number(h.sixes) : 0;
     wickets += Number.isFinite(Number(h?.wickets)) ? Number(h.wickets) : 0;
+    maidens += Number.isFinite(Number(h?.maidens)) ? Number(h.maidens) : 0;
+    catches += Number.isFinite(Number(h?.catches)) ? Number(h.catches) : 0;
+    wkCatches += Number.isFinite(Number(h?.wkCatches)) ? Number(h.wkCatches) : 0;
+    stumpings += Number.isFinite(Number(h?.stumpings)) ? Number(h.stumpings) : 0;
+    runOuts += Number.isFinite(Number(h?.runOuts)) ? Number(h.runOuts) : 0;
     const dnb = Boolean(h?.didNotBat);
     if (!dnb) {
       innings += 1;
@@ -452,7 +466,21 @@ function seasonCricketStatsFromHistory(history: WeekRecord[] | undefined) {
   }
   const outs = Math.max(innings - notOuts, 0);
   const average = outs > 0 ? runs / outs : null;
-  return { runs, wickets, innings, notOuts, outs, average };
+  return { runs, fours, sixes, wickets, maidens, catches, wkCatches, stumpings, runOuts, innings, notOuts, outs, average };
+}
+
+function seasonFantasyBreakdownFromHistory(history: WeekRecord[] | undefined) {
+  let batting = 0;
+  let bowling = 0;
+  let fielding = 0;
+  for (const h of history ?? []) {
+    const br = fantasyPointsBreakdown(h);
+    batting += br.batting;
+    bowling += br.bowling;
+    fielding += br.fieldingOutfield + br.keeper;
+  }
+  const total = batting + bowling + fielding;
+  return { batting, bowling, fielding, total };
 }
 
 /** Clone for post-save reconciliation with Firestore snapshots (avoids stale-cache overwrites). */
@@ -1121,6 +1149,7 @@ export default function Page() {
   const [adminAccessProbing, setAdminAccessProbing] = useState(false);
   const [playedPickerOpen, setPlayedPickerOpen] = useState(false);
   const [playedPickerIds, setPlayedPickerIds] = useState<number[]>([]);
+  const [showOnlyPlayedRows, setShowOnlyPlayedRows] = useState(false);
   const [adminStatsSort, setAdminStatsSort] = useState<{ key: AdminStatsSortKey; dir: "asc" | "desc" }>({
     key: "name",
     dir: "asc",
@@ -1509,7 +1538,7 @@ export default function Page() {
         .filter((p) => p.available)
         .slice()
         .sort((a, b) => compareDraftPoolPlayers(a, b, playersTabSortKey, playersTabSortDir, ownership))
-        .map((p) => ({ player: p, points: calculatePoints(p), season: seasonCricketStatsFromHistory(p.history) })),
+        .map((p) => ({ player: p, season: seasonCricketStatsFromHistory(p.history) })),
     [players, playersTabSortKey, playersTabSortDir, ownership],
   );
 
@@ -1609,6 +1638,12 @@ export default function Page() {
       return a.name.localeCompare(b.name);
     });
   }, [localPlayers, adminStatsSort]);
+
+  const adminVisiblePlayers = useMemo(() => {
+    if (!showOnlyPlayedRows) return adminSortedPlayers;
+    const played = new Set(playedPickerIds);
+    return adminSortedPlayers.filter((p) => played.has(p.id));
+  }, [adminSortedPlayers, showOnlyPlayedRows, playedPickerIds]);
 
   const validation = useMemo(() => validateTeam({
     teamName: builder.teamName, selected: builder.selected,
@@ -1967,6 +2002,7 @@ export default function Page() {
     );
     setUnsavedStats(true);
     setPlayedPickerOpen(false);
+    setShowOnlyPlayedRows(true);
     setActionError(null);
   }
 
@@ -1988,6 +2024,7 @@ export default function Page() {
       })),
     );
     setUnsavedStats(true);
+    setShowOnlyPlayedRows(false);
     setActionError(null);
   }
 
@@ -3330,7 +3367,7 @@ export default function Page() {
                           <option value="price">Price</option>
                           <option value="picked">Times picked</option>
                         </optgroup>
-                        <optgroup label="This GW">
+                        <optgroup label="Cumulative">
                           <option value="runs">Runs</option>
                           <option value="fours">Fours</option>
                           <option value="sixes">Sixes</option>
@@ -3340,7 +3377,7 @@ export default function Page() {
                           <option value="wkCatches">WK catches</option>
                           <option value="stumpings">Stumpings</option>
                           <option value="runOuts">Run outs</option>
-                          <option value="gwPoints">GW fantasy pts</option>
+                          <option value="gwPoints">Fantasy points</option>
                         </optgroup>
                         <optgroup label="Season">
                           <option value="seasonPts">Season Σ</option>
@@ -3398,31 +3435,30 @@ export default function Page() {
                             <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Inns</th>
                             <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">NO</th>
                             <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Avg</th>
-                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">GW pts</th>
+                            <th className="sticky top-0 z-20 bg-zinc-950 px-4 py-3 text-right shadow-[0_1px_0_0_rgba(255,255,255,0.06)]">Fantasy pts</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-white/10 text-sm text-zinc-100">
-                          {playerPoints.map(({ player: p, points, season }) => {
-                            const br = fantasyPointsBreakdown(p);
-                            const fldPts = br.fieldingOutfield + br.keeper;
+                          {playerPoints.map(({ player: p, season }) => {
+                            const seasonFantasy = seasonFantasyBreakdownFromHistory(p.history);
                             return (
                               <tr key={p.id}>
                                 <td className="sticky left-0 z-30 bg-zinc-950 px-4 py-3 font-semibold text-white shadow-[1px_0_0_0_rgba(255,255,255,0.06)]">{p.name}</td>
                                 <td className="px-4 py-3 text-zinc-300">{ROLE_LABEL[p.role]}</td>
                                 <td className="px-4 py-3 text-zinc-300">{TEAM_TIER_SHORT[p.teamTier]}</td>
                                 <td className="px-4 py-3 text-right text-zinc-200">{money(p.price)}</td>
-                                <td className="border-l border-white/10 px-4 py-3 text-right text-zinc-200">{p.runs}</td>
-                                <td className="px-4 py-3 text-right text-zinc-200">{p.fours}</td>
-                                <td className="px-4 py-3 text-right text-zinc-200">{p.sixes}</td>
-                                <td className="border-l border-white/10 px-4 py-3 text-right text-zinc-200">{p.wickets}</td>
-                                <td className="px-4 py-3 text-right text-zinc-200">{p.maidens}</td>
-                                <td className="border-l border-white/10 px-4 py-3 text-right text-zinc-200">{p.catches}</td>
-                                <td className="px-4 py-3 text-right text-zinc-200">{p.wkCatches}</td>
-                                <td className="px-4 py-3 text-right text-zinc-200">{p.stumpings}</td>
-                                <td className="px-4 py-3 text-right text-zinc-200">{p.runOuts}</td>
-                                <td className="border-l border-white/10 px-4 py-3 text-right font-medium text-sky-200/95">{br.batting}</td>
-                                <td className="px-4 py-3 text-right font-medium text-amber-200/95">{br.bowling}</td>
-                                <td className="px-4 py-3 text-right font-medium text-emerald-200/95">{fldPts}</td>
+                                <td className="border-l border-white/10 px-4 py-3 text-right text-zinc-200">{season.runs}</td>
+                                <td className="px-4 py-3 text-right text-zinc-200">{season.fours}</td>
+                                <td className="px-4 py-3 text-right text-zinc-200">{season.sixes}</td>
+                                <td className="border-l border-white/10 px-4 py-3 text-right text-zinc-200">{season.wickets}</td>
+                                <td className="px-4 py-3 text-right text-zinc-200">{season.maidens}</td>
+                                <td className="border-l border-white/10 px-4 py-3 text-right text-zinc-200">{season.catches}</td>
+                                <td className="px-4 py-3 text-right text-zinc-200">{season.wkCatches}</td>
+                                <td className="px-4 py-3 text-right text-zinc-200">{season.stumpings}</td>
+                                <td className="px-4 py-3 text-right text-zinc-200">{season.runOuts}</td>
+                                <td className="border-l border-white/10 px-4 py-3 text-right font-medium text-sky-200/95">{seasonFantasy.batting}</td>
+                                <td className="px-4 py-3 text-right font-medium text-amber-200/95">{seasonFantasy.bowling}</td>
+                                <td className="px-4 py-3 text-right font-medium text-emerald-200/95">{seasonFantasy.fielding}</td>
                                 <td className="border-l border-white/10 px-4 py-3 text-right font-semibold text-emerald-200">
                                   {sumSeasonPointsFromHistory(p.history)}
                                 </td>
@@ -3433,7 +3469,7 @@ export default function Page() {
                                 <td className="px-4 py-3 text-right font-semibold text-sky-200">
                                   {season.average == null ? "—" : season.average.toFixed(2)}
                                 </td>
-                                <td className="px-4 py-3 text-right font-bold text-white">{points}</td>
+                                <td className="px-4 py-3 text-right font-bold text-white">{seasonFantasy.total}</td>
                               </tr>
                             );
                           })}
@@ -3841,6 +3877,16 @@ export default function Page() {
                           <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end">
                             <button
                               type="button"
+                              onClick={() => setShowOnlyPlayedRows((v) => !v)}
+                              className={["inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold ring-1 transition",
+                                showOnlyPlayedRows
+                                  ? "bg-sky-600/25 text-sky-100 ring-sky-500/40 hover:bg-sky-600/35"
+                                  : "bg-white/5 text-zinc-200 ring-white/10 hover:bg-white/10"].join(" ")}
+                            >
+                              {showOnlyPlayedRows ? "Showing selected 22" : "Show selected 22 only"}
+                            </button>
+                            <button
+                              type="button"
                               onClick={startFreshGameweekSheet}
                               className="inline-flex items-center gap-2 rounded-xl bg-white/5 px-3 py-2 text-xs font-semibold text-zinc-200 ring-1 ring-white/10 transition hover:bg-white/10"
                             >
@@ -3914,7 +3960,7 @@ export default function Page() {
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-white/10">
-                              {adminSortedPlayers.map((p) => (
+                              {adminVisiblePlayers.map((p) => (
                                 <tr key={p.id} className="text-sm text-zinc-100">
                                   <td className="sticky left-0 z-30 bg-zinc-950 px-4 py-3 font-semibold text-white shadow-[1px_0_0_0_rgba(255,255,255,0.06)]">{p.name}</td>
                                   <td className="px-2 py-3 align-middle">

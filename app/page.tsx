@@ -1091,6 +1091,8 @@ export default function Page() {
   const [pcNote, setPcNote] = useState<string | null>(null);
   const [adminAccessProbe, setAdminAccessProbe] = useState<string | null>(null);
   const [adminAccessProbing, setAdminAccessProbing] = useState(false);
+  const [playedPickerOpen, setPlayedPickerOpen] = useState(false);
+  const [playedPickerIds, setPlayedPickerIds] = useState<number[]>([]);
   const [adminStatsSort, setAdminStatsSort] = useState<{ key: AdminStatsSortKey; dir: "asc" | "desc" }>({
     key: "name",
     dir: "asc",
@@ -1886,6 +1888,50 @@ export default function Page() {
     setUnsavedStats(true);
   }
 
+  function openPlayedPicker() {
+    const seed = localPlayers
+      .filter((p) =>
+        p.runs > 0 ||
+        p.fours > 0 ||
+        p.sixes > 0 ||
+        p.wickets > 0 ||
+        p.maidens > 0 ||
+        p.catches > 0 ||
+        p.wkCatches > 0 ||
+        p.stumpings > 0 ||
+        p.runOuts > 0,
+      )
+      .map((p) => p.id);
+    setPlayedPickerIds(seed);
+    setPlayedPickerOpen(true);
+  }
+
+  function applyPlayedPicker() {
+    const played = new Set(playedPickerIds);
+    setLocalPlayers((prev) =>
+      prev.map((p) => {
+        if (played.has(p.id)) {
+          return { ...p, didNotBat: false };
+        }
+        return {
+          ...p,
+          runs: 0,
+          fours: 0,
+          sixes: 0,
+          wickets: 0,
+          maidens: 0,
+          catches: 0,
+          wkCatches: 0,
+          stumpings: 0,
+          runOuts: 0,
+          didNotBat: true,
+        };
+      }),
+    );
+    setUnsavedStats(true);
+    setPlayedPickerOpen(false);
+  }
+
   async function importFromPlayCricket() {
     const id = pcMatchId.trim();
     if (!id || !/^\d+$/.test(id)) {
@@ -2299,6 +2345,8 @@ export default function Page() {
       if (mine && mine.players.length === SQUAD_SIZE) {
         setBuilder(builderStateFromSavedTeam(mine, playersByIdForGw));
       }
+      setLocalPlayers(updatedPlayers);
+      setUnsavedStats(false);
       setTab("draft");
     } catch {
       /* runAction already set actionError */
@@ -3713,14 +3761,23 @@ export default function Page() {
                             </p>
                             {unsavedStats && <div className="mt-1 text-xs text-amber-400">Unsaved changes</div>}
                           </div>
-                          <button type="button" onClick={() => void saveStats()} disabled={!unsavedStats || savingStats}
-                            className={["inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold ring-1 transition",
-                              savedStatsFlash ? "bg-emerald-600/20 text-emerald-300 ring-emerald-500/30"
-                                : unsavedStats && !savingStats ? "bg-red-600 text-white ring-red-500/40 hover:bg-red-500"
-                                : "bg-white/5 text-zinc-500 ring-white/10 opacity-50 cursor-not-allowed"].join(" ")}>
-                            <Save className="h-3.5 w-3.5" />
-                            {savingStats ? "Saving…" : savedStatsFlash ? "Saved ✓" : "Save stats"}
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={openPlayedPicker}
+                              className="inline-flex items-center gap-2 rounded-xl bg-sky-600/15 px-3 py-2 text-xs font-semibold text-sky-200 ring-1 ring-sky-500/35 transition hover:bg-sky-600/25"
+                            >
+                              Who played? Auto DNB
+                            </button>
+                            <button type="button" onClick={() => void saveStats()} disabled={!unsavedStats || savingStats}
+                              className={["inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold ring-1 transition",
+                                savedStatsFlash ? "bg-emerald-600/20 text-emerald-300 ring-emerald-500/30"
+                                  : unsavedStats && !savingStats ? "bg-red-600 text-white ring-red-500/40 hover:bg-red-500"
+                                  : "bg-white/5 text-zinc-500 ring-white/10 opacity-50 cursor-not-allowed"].join(" ")}>
+                              <Save className="h-3.5 w-3.5" />
+                              {savingStats ? "Saving…" : savedStatsFlash ? "Saved ✓" : "Save stats"}
+                            </button>
+                          </div>
                         </div>
                         <div className="max-h-[min(75vh,52rem)] overflow-auto">
                           <table className="table-fixed w-full min-w-[1640px] border-collapse">
@@ -3941,6 +3998,95 @@ export default function Page() {
 
         </main>
       </div>
+
+      {playedPickerOpen ? (
+        <div
+          role="presentation"
+          className="fixed inset-0 z-[95] flex items-center justify-center bg-black/70 p-3 backdrop-blur-sm"
+          onClick={() => setPlayedPickerOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="played-picker-title"
+            className="w-full max-w-2xl rounded-3xl bg-zinc-950 ring-1 ring-white/10"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-white/10 px-5 py-4">
+              <div>
+                <div id="played-picker-title" className="text-lg font-bold text-white">
+                  Who played in GW{currentGameweek}?
+                </div>
+                <div className="mt-1 text-xs text-zinc-400">
+                  Unticked players are set to all zero stats and auto DNB.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPlayedPickerOpen(false)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 text-zinc-300 ring-1 ring-white/10 hover:bg-white/10 hover:text-white"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="max-h-[60vh] overflow-auto px-5 py-4">
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPlayedPickerIds(localPlayers.map((p) => p.id))}
+                  className="rounded-lg bg-white/5 px-2.5 py-1.5 text-xs font-semibold text-zinc-200 ring-1 ring-white/10 hover:bg-white/10"
+                >
+                  Select all
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPlayedPickerIds([])}
+                  className="rounded-lg bg-white/5 px-2.5 py-1.5 text-xs font-semibold text-zinc-200 ring-1 ring-white/10 hover:bg-white/10"
+                >
+                  Clear all
+                </button>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {adminSortedPlayers.map((p) => {
+                  const on = playedPickerIds.includes(p.id);
+                  return (
+                    <label key={p.id} className="flex cursor-pointer items-center gap-2 rounded-xl bg-white/5 px-3 py-2 text-sm ring-1 ring-white/10">
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        onChange={(e) =>
+                          setPlayedPickerIds((prev) =>
+                            e.target.checked ? [...prev, p.id] : prev.filter((id) => id !== p.id),
+                          )
+                        }
+                        className="h-4 w-4 rounded border-white/20 bg-white/10 text-sky-500 focus:ring-sky-500/50"
+                      />
+                      <span className="truncate">{p.name}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-white/10 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setPlayedPickerOpen(false)}
+                className="rounded-xl bg-white/5 px-3 py-2 text-xs font-semibold text-zinc-300 ring-1 ring-white/10 hover:bg-white/10"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={applyPlayedPicker}
+                className="rounded-xl bg-sky-600 px-3 py-2 text-xs font-semibold text-white ring-1 ring-sky-500/40 hover:bg-sky-500"
+              >
+                Apply selection
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {teamModal ? (
         <div

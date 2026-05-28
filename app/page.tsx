@@ -1042,6 +1042,7 @@ function AdminStatsSortTh({
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Page() {
+  const EXPECTED_PLAYERS_PER_GW = 22;
   const router = useRouter();
   const [tab, setTab] = useState<TabKey>("draft");
 
@@ -1907,6 +1908,12 @@ export default function Page() {
   }
 
   function applyPlayedPicker() {
+    if (playedPickerIds.length !== EXPECTED_PLAYERS_PER_GW) {
+      setActionError(
+        `Select exactly ${EXPECTED_PLAYERS_PER_GW} players who played before applying auto DNB.`,
+      );
+      return;
+    }
     const played = new Set(playedPickerIds);
     setLocalPlayers((prev) =>
       prev.map((p) => {
@@ -1930,6 +1937,27 @@ export default function Page() {
     );
     setUnsavedStats(true);
     setPlayedPickerOpen(false);
+    setActionError(null);
+  }
+
+  function startFreshGameweekSheet() {
+    setLocalPlayers((prev) =>
+      prev.map((p) => ({
+        ...p,
+        runs: 0,
+        fours: 0,
+        sixes: 0,
+        wickets: 0,
+        maidens: 0,
+        catches: 0,
+        wkCatches: 0,
+        stumpings: 0,
+        runOuts: 0,
+        didNotBat: false,
+      })),
+    );
+    setUnsavedStats(true);
+    setActionError(null);
   }
 
   async function importFromPlayCricket() {
@@ -3751,8 +3779,8 @@ export default function Page() {
 
                       {/* Player stats table */}
                       <div className="rounded-2xl bg-white/5 ring-1 ring-white/10">
-                        <div className="flex items-center justify-between border-b border-white/10 p-4 sm:p-5">
-                          <div className="min-w-0 pr-3">
+                        <div className="flex flex-col gap-3 border-b border-white/10 p-4 sm:p-5 lg:flex-row lg:items-center lg:justify-between">
+                          <div className="min-w-0 lg:pr-3">
                             <div className="text-sm font-semibold text-white">Player stats</div>
                             <p className="mt-1 max-w-2xl text-xs leading-relaxed text-zinc-500">
                               <strong className="font-medium text-zinc-400">Catches</strong> is outfield total (includes catches credited before WK split). Enter{" "}
@@ -3761,7 +3789,14 @@ export default function Page() {
                             </p>
                             {unsavedStats && <div className="mt-1 text-xs text-amber-400">Unsaved changes</div>}
                           </div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end">
+                            <button
+                              type="button"
+                              onClick={startFreshGameweekSheet}
+                              className="inline-flex items-center gap-2 rounded-xl bg-white/5 px-3 py-2 text-xs font-semibold text-zinc-200 ring-1 ring-white/10 transition hover:bg-white/10"
+                            >
+                              Start fresh GW sheet
+                            </button>
                             <button
                               type="button"
                               onClick={openPlayedPicker}
@@ -3780,25 +3815,25 @@ export default function Page() {
                           </div>
                         </div>
                         <div className="max-h-[min(75vh,52rem)] overflow-auto">
-                          <table className="table-fixed w-full min-w-[1640px] border-collapse">
+                          <table className="table-fixed w-full min-w-[1460px] border-collapse">
                             <colgroup>
                               <col className="min-w-[11rem]" />
-                              <col className="w-44" />
-                              <col className="w-36" />
-                              <col className="w-24" />
-                              <col className="w-24" />
-                              <col className="w-24" />
-                              <col className="w-24" />
-                              <col className="w-24" />
-                              <col className="w-24" />
-                              <col className="w-24" />
-                              <col className="w-24" />
-                              <col className="w-24" />
-                              <col className="w-24" />
-                              <col className="w-24" />
+                              <col className="w-40" />
+                              <col className="w-32" />
+                              <col className="w-20" />
+                              <col className="w-20" />
+                              <col className="w-20" />
+                              <col className="w-20" />
+                              <col className="w-20" />
+                              <col className="w-20" />
+                              <col className="w-20" />
+                              <col className="w-20" />
+                              <col className="w-20" />
+                              <col className="w-20" />
+                              <col className="w-20" />
                               <col className="w-16" />
                               <col className="w-16" />
-                              <col className="w-28" />
+                              <col className="w-24" />
                               <col className="w-12" />
                             </colgroup>
                             <thead className="bg-black/40">
@@ -4020,6 +4055,9 @@ export default function Page() {
                 <div className="mt-1 text-xs text-zinc-400">
                   Unticked players are set to all zero stats and auto DNB.
                 </div>
+                <div className="mt-1 text-xs font-semibold text-sky-200">
+                  Selected: {playedPickerIds.length}/{EXPECTED_PLAYERS_PER_GW}
+                </div>
               </div>
               <button
                 type="button"
@@ -4079,7 +4117,13 @@ export default function Page() {
               <button
                 type="button"
                 onClick={applyPlayedPicker}
-                className="rounded-xl bg-sky-600 px-3 py-2 text-xs font-semibold text-white ring-1 ring-sky-500/40 hover:bg-sky-500"
+                disabled={playedPickerIds.length !== EXPECTED_PLAYERS_PER_GW}
+                className={[
+                  "rounded-xl px-3 py-2 text-xs font-semibold ring-1 transition",
+                  playedPickerIds.length === EXPECTED_PLAYERS_PER_GW
+                    ? "bg-sky-600 text-white ring-sky-500/40 hover:bg-sky-500"
+                    : "bg-white/5 text-zinc-500 ring-white/10 cursor-not-allowed",
+                ].join(" ")}
               >
                 Apply selection
               </button>

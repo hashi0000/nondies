@@ -62,6 +62,46 @@ export function gwSnapshotToSavedTeam(s: GwTeamSnapshot): SavedTeamLike {
   };
 }
 
+/** Overall ladder rank (1 = highest total) at end of a completed gameweek. */
+export function cumulativeRanksByUid(doc: GwTeamsDoc): Map<string, number> {
+  const sorted = [...doc.teams].sort(
+    (a, b) =>
+      b.cumulativePointsAfter - a.cumulativePointsAfter ||
+      b.weekPoints - a.weekPoints ||
+      a.name.localeCompare(b.name),
+  );
+  const ranks = new Map<string, number>();
+  sorted.forEach((t, i) => ranks.set(t.uid, i + 1));
+  return ranks;
+}
+
+/** Highest GW score in a completed gameweek snapshot. */
+export function teamOfTheWeekFromDoc(doc: GwTeamsDoc): GwTeamSnapshot | null {
+  if (!doc.teams.length) return null;
+  return [...doc.teams].sort(
+    (a, b) => b.weekPoints - a.weekPoints || b.cumulativePointsAfter - a.cumulativePointsAfter || a.name.localeCompare(b.name),
+  )[0];
+}
+
+export type RankMovement = {
+  overallRank: number;
+  previousRank: number | null;
+  /** Positive = moved up the ladder (lower rank number). */
+  delta: number | null;
+};
+
+export function rankMovement(
+  currentRanks: Map<string, number>,
+  previousRanks: Map<string, number> | null,
+  uid: string,
+): RankMovement {
+  const overallRank = currentRanks.get(uid) ?? 0;
+  if (!previousRanks) return { overallRank, previousRank: null, delta: null };
+  const previousRank = previousRanks.get(uid);
+  if (previousRank == null) return { overallRank, previousRank: null, delta: null };
+  return { overallRank, previousRank, delta: previousRank - overallRank };
+}
+
 export function parseGwTeamsDoc(raw: Record<string, unknown>): GwTeamsDoc | null {
   const gameweek = Number(raw.gameweek);
   if (!Number.isFinite(gameweek) || gameweek < 1) return null;

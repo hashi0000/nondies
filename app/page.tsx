@@ -69,12 +69,38 @@ import {
 } from "@/lib/transfers";
 import { normalizePlayCricketName } from "@/lib/playCricket/names";
 import {
+  cumulativeRanksByUid,
   deleteAllGwTeamsDocs,
   gwSnapshotToSavedTeam,
   parseGwTeamsDoc,
+  rankMovement,
   type GwTeamSnapshot,
   type GwTeamsDoc,
 } from "@/lib/gwTeams";
+
+/** Dream team size — top individual scorers for the gameweek. */
+const BEST_XI_SIZE = 11;
+
+type BestXiEntry = { id: number; name: string; role: PlayerRole; points: number };
+
+function bestXiForGameweek(playersList: Player[], gameweek: number, useLiveStats: boolean): BestXiEntry[] {
+  const rows: BestXiEntry[] = [];
+  for (const p of playersList) {
+    const histRec = (p.history ?? []).find((h) => h.week === gameweek);
+    let points = 0;
+    if (histRec) {
+      points = Number.isFinite(Number(histRec.points)) ? Number(histRec.points) : calculatePoints(histRec);
+    } else if (useLiveStats) {
+      points = calculatePoints(p);
+    } else {
+      continue;
+    }
+    if (points <= 0) continue;
+    rows.push({ id: p.id, name: p.name, role: p.role, points: Math.round(points * 10) / 10 });
+  }
+  rows.sort((a, b) => b.points - a.points || a.name.localeCompare(b.name));
+  return rows.slice(0, BEST_XI_SIZE);
+}
 
 /** Admin: zero every player’s weekly stat row and match history (player pool docs stay). */
 async function resetAllPlayerDocumentsStats() {
@@ -635,13 +661,25 @@ function playerFirstGameweekOnTeam(team: SavedTeam, playerId: number): number {
   return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
 }
 
+function playerScoringStartsGameweek(team: SavedTeam, playerId: number, scoringGameweek: number): number {
+  const joined = playerFirstGameweekOnTeam(team, playerId);
+  if (joined === scoringGameweek + 1) return scoringGameweek;
+  return joined;
+}
+
+function playerScoresInGameweek(team: SavedTeam, playerId: number, scoringGameweek: number): boolean {
+  return playerScoringStartsGameweek(team, playerId, scoringGameweek) <= scoringGameweek;
+}
+
 /**
  * First time a player appears on a saved squad (new team or transfer in).
  * GW1: they score in the opening gameweek like everyone else.
  * GW2+: they only start counting from the *next* gameweek so they can’t farm points from stats already on the board.
  */
-function firstScoringGameweekForNewSigning(currentGameweek: number): number {
-  return currentGameweek > 1 ? currentGameweek + 1 : 1;
+function firstScoringGameweekForNewSigning(currentGameweek: number, now = new Date()): number {
+  if (currentGameweek <= 1) return 1;
+  if (!isSelectionLocked(now)) return currentGameweek;
+  return currentGameweek + 1;
 }
 
 function transferPenaltiesApplyInGameweek(currentGameweek: number): boolean {
@@ -688,10 +726,11 @@ function buildPlayerJoinedGameweekAfterSave(
   existing: SavedTeam | null,
   newPlayers: number[],
   gameweek: number,
+  now = new Date(),
 ): Record<string, number> {
   const next: Record<string, number> = {};
   if (!existing) {
-    const j = firstScoringGameweekForNewSigning(gameweek);
+    const j = firstScoringGameweekForNewSigning(gameweek, now);
     for (const id of newPlayers) next[String(id)] = j;
     return next;
   }
@@ -708,9 +747,10 @@ function buildPlayerJoinedGameweekAfterSave(
             ? Number(String(v).trim())
             : 1;
       if (!Number.isFinite(n) || n < 1) n = 1;
+      if (n === gameweek + 1 && !isSelectionLocked(now)) n = gameweek;
       next[key] = n;
     } else {
-      next[key] = firstScoringGameweekForNewSigning(gameweek);
+      next[key] = firstScoringGameweekForNewSigning(gameweek, now);
     }
   }
   return next;
@@ -719,7 +759,7 @@ function buildPlayerJoinedGameweekAfterSave(
 function computeWeekPoints(team: SavedTeam, byId: Map<number, Player>, scoringGameweek: number) {
   let total = 0;
   for (const id of team.players) {
-    if (playerFirstGameweekOnTeam(team, id) > scoringGameweek) continue;
+    if (!playerScoresInGameweek(team, id, scoringGameweek)) continue;
     const p = byId.get(id);
     if (!p) continue;
     const base = calculatePoints(p);
@@ -773,7 +813,7 @@ function squadFieldingSummaryForGameweek(
 ): SquadFieldingTotals {
   let acc: SquadFieldingTotals = { outfieldCatches: 0, wkCatches: 0, stumpings: 0, runOuts: 0 };
   for (const id of team.players) {
-    if (playerFirstGameweekOnTeam(team, id) > scoringGameweek) continue;
+    if (!playerScoresInGameweek(team, id, scoringGameweek)) continue;
     const p = byId.get(id);
     if (!p) continue;
     if (useLiveStats) {
@@ -885,6 +925,42 @@ function Pill({ children, tone = "neutral" }: { children: React.ReactNode; tone?
     : tone === "blue" ? "bg-sky-500/15 text-sky-200 ring-1 ring-sky-500/30"
     : "bg-white/5 text-zinc-200 ring-1 ring-white/10";
   return <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs ${cls}`}>{children}</span>;
+}
+
+function RankMovementPill({
+  overallRank,
+  previousRank,
+  delta,
+  compareGw,
+}: {
+  overallRank: number;
+  previousRank: number | null;
+  delta: number | null;
+  compareGw: number | null;
+}) {
+  if (!overallRank) return null;
+  const rankTone = overallRank === 1 ? "font-semibold text-emerald-200" : "font-semibold text-zinc-200";
+  let move: React.ReactNode = null;
+  if (compareGw != null && compareGw >= 1) {
+    if (delta == null || previousRank == null) {
+      move = <span className="text-sky-300">NEW</span>;
+    } else if (delta > 0) {
+      move = <span className="text-emerald-300">↑{delta}</span>;
+    } else if (delta < 0) {
+      move = <span className="text-red-300">↓{Math.abs(delta)}</span>;
+    } else {
+      move = <span className="text-zinc-500">—</span>;
+    }
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs text-zinc-400">
+      <span className={rankTone}>#{overallRank}</span>
+      {move}
+      {compareGw != null && compareGw >= 1 && previousRank != null ? (
+        <span className="text-zinc-600">was #{previousRank}</span>
+      ) : null}
+    </span>
+  );
 }
 
 function Card({ children }: { children: React.ReactNode }) {
@@ -1915,6 +1991,41 @@ export default function Page() {
   const leaderboardViewLabel =
     leaderboardGwView === "live" ? `GW${currentGameweek} (live)` : `GW${leaderboardGwView} (archive)`;
 
+  const viewingGameweek = leaderboardGwView === "live" ? currentGameweek : leaderboardGwView;
+
+  const overallRankMaps = useMemo(() => {
+    const prevDoc = gwTeamsArchive.find((g) => g.gameweek === viewingGameweek - 1);
+    const previous = prevDoc ? cumulativeRanksByUid(prevDoc) : null;
+
+    if (leaderboardGwView === "live") {
+      const current = new Map<string, number>();
+      leaderboard.forEach((row, i) => current.set(row.team.uid, i + 1));
+      return { current, previous, compareGw: viewingGameweek > 1 ? viewingGameweek - 1 : null };
+    }
+
+    const doc = gwTeamsArchive.find((g) => g.gameweek === viewingGameweek);
+    const current = doc ? cumulativeRanksByUid(doc) : new Map<string, number>();
+    return { current, previous, compareGw: viewingGameweek > 1 ? viewingGameweek - 1 : null };
+  }, [leaderboardGwView, viewingGameweek, leaderboard, gwTeamsArchive]);
+
+  const gwBestXi = useMemo(() => {
+    const live = leaderboardGwView === "live";
+    const pool = live ? [...scoringPlayersById.values()] : players;
+    const xi = bestXiForGameweek(pool, viewingGameweek, live);
+    return { gameweek: viewingGameweek, players: xi, provisional: live };
+  }, [leaderboardGwView, viewingGameweek, scoringPlayersById, players]);
+
+  const gwBestXiHistory = useMemo(
+    () =>
+      completedGameweeks.map((gw) => {
+        const xi = bestXiForGameweek(players, gw, false);
+        const top = xi[0];
+        if (!top) return null;
+        return { gameweek: gw, topName: top.name, topPoints: top.points };
+      }).filter((x): x is { gameweek: number; topName: string; topPoints: number } => x != null),
+    [completedGameweeks, players],
+  );
+
   useEffect(() => {
     if (leaderboardGwView === "live") return;
     if (!completedGameweeks.includes(leaderboardGwView)) setLeaderboardGwView("live");
@@ -1986,9 +2097,9 @@ export default function Page() {
 
         const newPlayers = [...builder.selected];
         const prevCumulative = existing?.cumulativePoints ?? 0;
-        const playerJoinedGameweek = buildPlayerJoinedGameweekAfterSave(existing, newPlayers, currentGameweek);
-
         const nowSave = new Date();
+        const playerJoinedGameweek = buildPlayerJoinedGameweekAfterSave(existing, newPlayers, currentGameweek, nowSave);
+
         const penaltiesApply = transferPenaltiesApplyForTeam(currentGameweek, existing, nowSave);
 
         let baseline: number[];
@@ -3335,8 +3446,7 @@ export default function Page() {
                           )}
                           {currentGameweek > 1 ? (
                             <span className="mt-2 block border-t border-white/10 pt-2 text-zinc-500">
-                              <strong className="text-zinc-300">Mid-season signings:</strong> anyone not on your saved squad at the start of GW{currentGameweek} only earns fantasy points from{" "}
-                              <strong className="text-zinc-300">GW{currentGameweek + 1}</strong> — not from this gameweek&apos;s stats (stops loading up on players who already banked a big week).
+                              <strong className="text-zinc-300">Transfers before lock:</strong> anyone you bring in before {LINEUP_LOCK_SUMMARY} scores from this gameweek. After lock, new signings only count from the next gameweek.
                             </span>
                           ) : null}
                         </div>
@@ -3391,6 +3501,71 @@ export default function Page() {
                       </select>
                     </label>
                   </div>
+
+                  {gwBestXi.players.length > 0 ? (
+                    <div className="mb-4 rounded-2xl bg-amber-500/10 p-4 ring-1 ring-amber-500/30 sm:p-5">
+                      <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                        <div>
+                          <div className="text-xs font-bold uppercase tracking-[0.2em] text-amber-300/90">
+                            Best XI — GW{gwBestXi.gameweek}
+                            {gwBestXi.provisional ? " (provisional)" : ""}
+                          </div>
+                          <p className="mt-1 text-sm text-amber-100/75">
+                            Top {BEST_XI_SIZE} individual fantasy scorers this gameweek (raw player points, no captain boost).
+                          </p>
+                        </div>
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {gwBestXi.players.map((p, idx) => (
+                          <div
+                            key={p.id}
+                            className="flex items-center justify-between gap-3 rounded-xl bg-zinc-950/50 px-3 py-2.5 ring-1 ring-white/10"
+                          >
+                            <div className="flex min-w-0 items-center gap-2.5">
+                              <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-amber-500/20 text-xs font-bold text-amber-100 ring-1 ring-amber-500/30">
+                                {idx + 1}
+                              </span>
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-semibold text-white">{p.name}</div>
+                                <div className="text-xs text-zinc-400">{ROLE_LABEL[p.role]}</div>
+                              </div>
+                            </div>
+                            <div className="shrink-0 text-right text-sm font-bold text-amber-100">{p.points}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {gwBestXiHistory.length > 0 ? (
+                    <div className="mb-4 rounded-2xl bg-white/5 p-3 ring-1 ring-white/10">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Past best XI (top scorer)</div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {gwBestXiHistory.map((row) => (
+                          <button
+                            key={row.gameweek}
+                            type="button"
+                            onClick={() => setLeaderboardGwView(row.gameweek)}
+                            className={[
+                              "rounded-full px-3 py-1.5 text-xs font-medium ring-1 transition",
+                              leaderboardGwView === row.gameweek
+                                ? "bg-red-600/25 text-red-100 ring-red-500/40"
+                                : "bg-zinc-950/60 text-zinc-300 ring-white/10 hover:bg-white/10",
+                            ].join(" ")}
+                          >
+                            GW{row.gameweek}: {row.topName} ({row.topPoints})
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {overallRankMaps.compareGw != null ? (
+                    <p className="mb-3 text-xs text-zinc-500">
+                      Overall ladder movement vs end of GW{overallRankMaps.compareGw}. Archived weeks also sort by GW points — overall rank shows season position.
+                    </p>
+                  ) : null}
+
                   {displayedLeaderboard.length === 0 ? (
                     <div className="rounded-2xl bg-white/5 p-6 text-center ring-1 ring-white/10">
                       <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-red-600/15 ring-1 ring-red-500/30">
@@ -3412,13 +3587,28 @@ export default function Page() {
                     </div>
                   ) : (
                     <div className="grid gap-3">
-                      {displayedLeaderboard.map((row, idx) => (
+                      {displayedLeaderboard.map((row, idx) => {
+                        const movement = rankMovement(
+                          overallRankMaps.current,
+                          overallRankMaps.previous,
+                          row.team.uid,
+                        );
+                        const weekRank = idx + 1;
+                        return (
                         <div key={row.team.uid} className={["rounded-2xl p-4 ring-1 sm:p-5",
                           row.team.uid === authUser.uid ? "bg-red-600/8 ring-red-500/20" : "bg-white/5 ring-white/10"].join(" ")}>
                           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                             <div className="min-w-0">
-                              <div className="flex items-center gap-2">
-                                <Pill tone={idx === 0 ? "green" : "neutral"}>#{idx + 1}</Pill>
+                              <div className="flex flex-wrap items-center gap-2">
+                                {leaderboardGwView !== "live" ? (
+                                  <Pill tone={weekRank === 1 ? "green" : "neutral"}>GW #{weekRank}</Pill>
+                                ) : null}
+                                <RankMovementPill
+                                  overallRank={movement.overallRank}
+                                  previousRank={movement.previousRank}
+                                  delta={movement.delta}
+                                  compareGw={overallRankMaps.compareGw}
+                                />
                                 <div className="truncate text-lg font-bold">{row.team.name}</div>
                                 {row.team.uid === authUser.uid && <Pill tone="blue">You</Pill>}
                               </div>
@@ -3460,7 +3650,8 @@ export default function Page() {
                             </div>
                           </div>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </CardBody>
@@ -4416,7 +4607,7 @@ export default function Page() {
                   if (!p) return null;
                   const hist = !modalLive ? (p.history ?? []).find((h) => h.week === modalGw) : null;
                   const statLine = hist ?? p;
-                  const scoresThisGw = playerFirstGameweekOnTeam(teamModal, pid) <= modalGw;
+                  const scoresThisGw = playerScoresInGameweek(teamModal, pid, modalGw);
                   const fieldingLabel = scoresThisGw ? formatSquadFieldingSummary(squadFieldingFromStatLine(statLine)) : null;
                   const basePts = scoresThisGw ? calculatePoints(statLine) : 0;
                   const isC = teamModal.captain === pid;

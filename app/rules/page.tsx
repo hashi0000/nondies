@@ -232,7 +232,7 @@ export default function RulesPage() {
                       <strong className="text-white">{MAX_BANKED_FREE_TRANSFERS}</strong> free changes banked for a busy week. Each change beyond that costs{" "}
                       <strong className="text-white">{POINTS_PER_EXTRA_TRANSFER} points</strong> off your league total (committee can retune anytime in{" "}
                       <code className="rounded bg-black/40 px-1 font-mono text-[11px] text-zinc-200">lib/leagueConfig.ts</code> as <code className="rounded bg-black/40 px-1 font-mono text-[11px]">POINTS_PER_EXTRA_TRANSFER</code>).
-                      Changes are meant to apply from the <strong className="text-white">following</strong> gameweek. If you transfer the captain out, pick a new captain.
+                      Transfers saved before {LINEUP_LOCK_SUMMARY} (your time) score from <strong className="text-white">this</strong> gameweek; after lock, new signings only count from the next gameweek. If you transfer the captain out, pick a new captain.
                     </li>
                     <li>
                       <strong className="text-white">GW1 pre-lock window:</strong> unlimited free changes until the first lock at <strong className="text-white">{LINEUP_LOCK_SUMMARY}</strong> (local time).

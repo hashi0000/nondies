@@ -77,6 +77,12 @@ import {
   type GwTeamSnapshot,
   type GwTeamsDoc,
 } from "@/lib/gwTeams";
+import {
+  computeDynamicPricingMap,
+  MAX_FORM_PRICE_DELTA,
+  squadBudgetStatus,
+  withEffectivePrices,
+} from "@/lib/dynamicPricing";
 
 /** Dream team size — top individual scorers for the gameweek. */
 const BEST_XI_SIZE = 11;
@@ -180,6 +186,11 @@ type Player = {
   didNotBat?: boolean;
   /** Batter remained not out in this GW. Used for batting average on player leaderboard. */
   notOut?: boolean;
+  /** Listed base price in Firestore; effective draft price may differ (see dynamic pricing). */
+  basePrice?: number;
+  /** effectivePrice − basePrice from season + recent form within tier. */
+  priceDelta?: number;
+  formScore?: number;
 };
 
 type SavedTeam = {
@@ -360,6 +371,67 @@ function money(n: number) {
   const v = Number(n);
   const x = Number.isFinite(v) ? Math.trunc(v) : 0;
   return `£${x}`;
+}
+
+function SquadOverBudgetBanner({
+  spend,
+  overBy,
+  locked,
+  onOpenDraft,
+}: {
+  spend: number;
+  overBy: number;
+  locked: boolean;
+  onOpenDraft: () => void;
+}) {
+  return (
+    <div className="rounded-2xl border border-amber-500/45 bg-amber-500/15 px-4 py-3.5 text-sm text-amber-100 ring-1 ring-amber-500/35">
+      <div className="font-semibold text-amber-50">Your saved squad is over budget</div>
+      <p className="mt-1.5 leading-relaxed text-amber-100/90">
+        Dynamic pricing is live. Your Firestore squad costs <strong className="text-white">{money(spend)}</strong> (cap{" "}
+        <strong className="text-white">{money(BUDGET)}</strong>, <strong className="text-white">{money(overBy)}</strong> over).
+        {locked
+          ? ` You can edit again after ${LINEUP_LOCK_SUMMARY} — then remove or swap players and save.`
+          : " Open Draft, adjust your squad, and save — you cannot save until spend is within the cap."}
+      </p>
+      {!locked ? (
+        <button
+          type="button"
+          onClick={onOpenDraft}
+          className="mt-3 rounded-xl bg-amber-600 px-3 py-2 text-xs font-bold text-white ring-1 ring-amber-500/50 hover:bg-amber-500"
+        >
+          Fix squad in Draft
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function PriceWithForm({
+  price,
+  basePrice,
+  priceDelta,
+}: {
+  price: number;
+  basePrice?: number;
+  priceDelta?: number;
+}) {
+  const delta = priceDelta ?? 0;
+  const base = basePrice ?? price;
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      <span className="font-medium text-zinc-200">{money(price)}</span>
+      {delta !== 0 && (
+        <span className={`text-[11px] font-semibold ${delta > 0 ? "text-emerald-400" : "text-amber-400"}`}>
+          {delta > 0 ? "+" : ""}
+          {delta} form
+        </span>
+      )}
+      {delta !== 0 && base !== price && (
+        <span className="text-[10px] text-zinc-500">listed {money(base)}</span>
+      )}
+    </span>
+  );
 }
 
 /** Firestore may omit `teamTier` on older docs — infer from seeded id band, else 2nd XI. */
@@ -696,6 +768,34 @@ function transferPenaltiesApplyForTeam(currentGameweek: number, existing: SavedT
   return true;
 }
 
+function squadTransferBaseline(saved: SavedTeam, penaltiesApply: boolean, gameweek: number): number[] {
+  const useLastSaved =
+    !penaltiesApply &&
+    transferPenaltiesApplyInGameweek(gameweek) &&
+    saved.players.length === SQUAD_SIZE;
+  if (useLastSaved) return [...saved.players];
+  if (saved.transferBaselinePlayers?.length === SQUAD_SIZE) return [...saved.transferBaselinePlayers];
+  return [...saved.players];
+}
+
+function transferPlayerNameDiff(
+  baseline: number[],
+  selected: number[],
+  playersById: Map<number, Player>,
+): { outgoing: string[]; incoming: string[] } {
+  const baseSet = new Set(baseline);
+  const selSet = new Set(selected);
+  const outgoing: string[] = [];
+  const incoming: string[] = [];
+  for (const id of baseline) {
+    if (!selSet.has(id)) outgoing.push(playersById.get(id)?.name ?? `Player ${id}`);
+  }
+  for (const id of selected) {
+    if (!baseSet.has(id)) incoming.push(playersById.get(id)?.name ?? `Player ${id}`);
+  }
+  return { outgoing, incoming };
+}
+
 /** Stable key for “did this saved squad row change?” — avoids effect churn on new `teams` array identity. */
 function savedTeamHydrateWireKey(team: SavedTeam): string {
   return [
@@ -873,7 +973,11 @@ function validateTeam(args: {
       `Squad must be ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} wicketkeeper (currently ${c.bat}/${c.ar}/${c.bowl}/${c.wk}).`,
     );
   }
-  if (!checks.withinBudget) problems.push(`Stay within budget (${money(BUDGET)}).`);
+  if (!checks.withinBudget) {
+    problems.push(
+      `Stay within budget (${money(BUDGET)}). Squad costs ${money(spend)} at current form-adjusted prices — swap or remove players.`,
+    );
+  }
   if (!checks.captain) problems.push("Select a captain (C).");
   if (!checks.viceCaptain) problems.push("Select a vice-captain (VC).");
   if (!checks.uniqueLeadership) problems.push("Captain and vice-captain must be different.");
@@ -925,6 +1029,222 @@ function Pill({ children, tone = "neutral" }: { children: React.ReactNode; tone?
     : tone === "blue" ? "bg-sky-500/15 text-sky-200 ring-1 ring-sky-500/30"
     : "bg-white/5 text-zinc-200 ring-1 ring-white/10";
   return <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs ${cls}`}>{children}</span>;
+}
+
+function TransferImpactPanel({
+  currentGameweek,
+  selectedCount,
+  freeAtLock,
+  preview,
+  rules,
+  locked,
+}: {
+  currentGameweek: number;
+  selectedCount: number;
+  freeAtLock: number | null;
+  preview: ReturnType<typeof buildTransferSavePreview>;
+  rules: { gw1Open: boolean; newJoinGrace: boolean };
+  locked: boolean;
+}) {
+  if (locked) {
+    return (
+      <div className="rounded-xl border border-zinc-600/40 bg-zinc-900/80 p-3 ring-1 ring-white/10">
+        <div className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">Transfers locked</div>
+        <p className="mt-1 text-sm text-zinc-400">Lineup is locked until the admin ends this gameweek.</p>
+      </div>
+    );
+  }
+
+  if (!preview) {
+    return (
+      <div className="rounded-xl border border-amber-500/35 bg-amber-950/20 p-3 ring-1 ring-amber-500/25">
+        <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300/90">
+          Transfer preview · GW{currentGameweek}
+        </div>
+        <p className="mt-2 text-sm text-zinc-200">
+          Pick <strong className="text-white">{SQUAD_SIZE - selectedCount}</strong> more player
+          {SQUAD_SIZE - selectedCount === 1 ? "" : "s"} to see how many free transfers this save will use and any point hit.
+        </p>
+        {freeAtLock != null ? (
+          <p className="mt-2 text-xs text-zinc-400">
+            Free transfers available this gameweek: <strong className="text-white">{freeAtLock}</strong>
+            <span className="text-zinc-500"> (max {MAX_FREE_TRANSFERS_IN_GW} in one GW)</span>
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (preview.kind === "first") {
+    return (
+      <div className="rounded-xl border border-emerald-500/35 bg-emerald-950/25 p-3 ring-1 ring-emerald-500/25">
+        <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-300/90">First save</div>
+        <p className="mt-2 text-sm text-emerald-100/90">
+          <strong className="text-white">No transfer charge.</strong> This squad becomes your starting point for GW{currentGameweek}.
+        </p>
+      </div>
+    );
+  }
+
+  if (!preview.penaltiesApply) {
+    return (
+      <div className="rounded-xl border border-emerald-500/35 bg-emerald-950/25 p-3 ring-1 ring-emerald-500/25">
+        <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-300/90">
+          Unlimited changes · GW{currentGameweek}
+        </div>
+        <p className="mt-2 text-sm text-emerald-100/90">
+          {rules.gw1Open ? (
+            <>Opening gameweek — change players freely until lineup lock with <strong className="text-white">no transfer penalties</strong>.</>
+          ) : (
+            <>New this gameweek — unlimited player changes until <strong className="text-white">{LINEUP_LOCK_SUMMARY}</strong>.</>
+          )}
+        </p>
+      </div>
+    );
+  }
+
+  const costTone =
+    preview.extras > 0
+      ? "border-red-500/40 bg-red-950/30 ring-red-500/30"
+      : preview.T > 0
+        ? "border-sky-500/35 bg-sky-950/25 ring-sky-500/20"
+        : "border-emerald-500/30 bg-emerald-950/20 ring-emerald-500/20";
+
+  return (
+    <div className={["rounded-xl border p-3 ring-1", costTone].join(" ")}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-[11px] font-bold uppercase tracking-wider text-sky-200/90">
+          Live transfer summary · GW{currentGameweek}
+        </div>
+        {preview.extras > 0 ? (
+          <span className="rounded-full bg-red-600/25 px-2.5 py-0.5 text-xs font-bold text-red-100 ring-1 ring-red-500/40">
+            −{preview.penaltyDue} pts on save
+          </span>
+        ) : preview.T > 0 ? (
+          <span className="rounded-full bg-emerald-600/20 px-2.5 py-0.5 text-xs font-semibold text-emerald-100 ring-1 ring-emerald-500/35">
+            No point hit
+          </span>
+        ) : (
+          <span className="rounded-full bg-white/10 px-2.5 py-0.5 text-xs font-medium text-zinc-300 ring-1 ring-white/10">
+            No player swaps
+          </span>
+        )}
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <div className="rounded-lg bg-black/25 px-3 py-2 ring-1 ring-white/10">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Player changes</div>
+          <div className="mt-0.5 text-lg font-bold tabular-nums text-white">{preview.T}</div>
+        </div>
+        <div className="rounded-lg bg-black/25 px-3 py-2 ring-1 ring-white/10">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Free transfers used</div>
+          <div className="mt-0.5 text-lg font-bold tabular-nums text-emerald-200">
+            {preview.freeUsed} <span className="text-sm font-medium text-zinc-400">/ {preview.F}</span>
+          </div>
+        </div>
+        <div className="rounded-lg bg-black/25 px-3 py-2 ring-1 ring-white/10">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Free left after save</div>
+          <div className="mt-0.5 text-lg font-bold tabular-nums text-zinc-200">{preview.freeRemaining}</div>
+        </div>
+        <div className="rounded-lg bg-black/25 px-3 py-2 ring-1 ring-white/10">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Extra transfers</div>
+          <div className="mt-0.5 text-lg font-bold tabular-nums text-amber-200">
+            {preview.extras}
+            {preview.extras > 0 ? (
+              <span className="text-sm font-medium text-red-300"> (−{POINTS_PER_EXTRA_TRANSFER} each)</span>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      {(preview.outgoing.length > 0 || preview.incoming.length > 0) && (
+        <div className="mt-3 grid gap-2 border-t border-white/10 pt-3 text-xs sm:grid-cols-2">
+          {preview.outgoing.length > 0 ? (
+            <div>
+              <div className="font-semibold text-red-200/90">Out</div>
+              <ul className="mt-1 space-y-0.5 text-zinc-300">
+                {preview.outgoing.map((name) => (
+                  <li key={`out-${name}`}>− {name}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {preview.incoming.length > 0 ? (
+            <div>
+              <div className="font-semibold text-emerald-200/90">In</div>
+              <ul className="mt-1 space-y-0.5 text-zinc-300">
+                {preview.incoming.map((name) => (
+                  <li key={`in-${name}`}>+ {name}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {preview.penaltyDelta !== 0 ? (
+        <p className="mt-3 border-t border-white/10 pt-2 text-xs text-zinc-400">
+          vs your last save, league total moves by{" "}
+          <strong className={preview.penaltyDelta > 0 ? "text-amber-200" : "text-emerald-200"}>
+            {preview.penaltyDelta > 0 ? "−" : "+"}
+            {Math.abs(preview.penaltyDelta)}
+          </strong>{" "}
+          pts from transfer hits.
+        </p>
+      ) : preview.extras > 0 ? (
+        <p className="mt-3 border-t border-white/10 pt-2 text-xs text-amber-200/90">
+          Saving will deduct <strong className="text-amber-100">−{preview.penaltyDue}</strong> from your season total.
+        </p>
+      ) : preview.T > 0 ? (
+        <p className="mt-3 border-t border-white/10 pt-2 text-xs text-zinc-400">
+          All changes fit your free allowance — captain / vice / keeper updates do not count as transfers.
+        </p>
+      ) : (
+        <p className="mt-3 border-t border-white/10 pt-2 text-xs text-zinc-400">
+          Same players as your GW baseline — you can still save to update captain, vice, or keeper.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function buildTransferSavePreview(
+  mySavedTeam: SavedTeam | null,
+  selected: number[],
+  currentGameweek: number,
+  playersById: Map<number, Player>,
+  now: Date,
+) {
+  if (selected.length !== SQUAD_SIZE) return null;
+  const penaltiesApply = transferPenaltiesApplyForTeam(currentGameweek, mySavedTeam ?? null, now);
+  if (!mySavedTeam) {
+    return { kind: "first" as const, penaltiesApply };
+  }
+  const baseline = squadTransferBaseline(mySavedTeam, penaltiesApply, currentGameweek);
+  const F =
+    typeof mySavedTeam.freeTransfersAtGwStart === "number" && Number.isFinite(mySavedTeam.freeTransfersAtGwStart)
+      ? Math.max(0, Math.min(Math.floor(mySavedTeam.freeTransfersAtGwStart), MAX_FREE_TRANSFERS_IN_GW))
+      : MAX_FREE_TRANSFERS_IN_GW;
+  const T = countOutgoingPlayerChanges(baseline, selected);
+  const extras = penaltiesApply ? transferExtrasAgainstFree(T, F) : 0;
+  const penaltyDue = penaltiesApply ? penaltyPointsForExtras(extras) : 0;
+  const penaltyDelta = penaltyDue - (mySavedTeam.transferPenaltyPointsApplied ?? 0);
+  const freeUsed = penaltiesApply ? Math.min(T, F) : T;
+  const freeRemaining = penaltiesApply ? Math.max(0, F - freeUsed) : F;
+  const { outgoing, incoming } = transferPlayerNameDiff(baseline, selected, playersById);
+  return {
+    kind: "returning" as const,
+    penaltiesApply,
+    T,
+    F,
+    extras,
+    penaltyDue,
+    penaltyDelta,
+    freeUsed,
+    freeRemaining,
+    outgoing,
+    incoming,
+  };
 }
 
 function RankMovementPill({
@@ -1622,7 +1942,19 @@ export default function Page() {
 
   // ── Derived ────────────────────────────────────────────────────────────────
 
-  const playersById = useMemo(() => new Map(players.map((p) => [p.id, p])), [players]);
+  const draftPricingMap = useMemo(() => computeDynamicPricingMap(players), [players]);
+  const adminPricingMap = useMemo(
+    () => computeDynamicPricingMap(unsavedStats ? localPlayers : players),
+    [unsavedStats, localPlayers, players],
+  );
+  const draftPoolPlayers = useMemo(
+    () => withEffectivePrices(players, draftPricingMap),
+    [players, draftPricingMap],
+  );
+  const playersById = useMemo(
+    () => new Map(draftPoolPlayers.map((p) => [p.id, p])),
+    [draftPoolPlayers],
+  );
   /** Same source as End GW — includes unsaved admin table so catches update the leaderboard after Save stats (and for admin preview before save). */
   const scoringPlayers = useMemo(
     () => (unsavedStats ? localPlayers : players),
@@ -1687,7 +2019,7 @@ export default function Page() {
   }, []);
   const playerPoints = useMemo(
     () => {
-      const rows = players
+      const rows = draftPoolPlayers
         .filter((p) => p.available)
         .map((p) => {
           const season = seasonCricketStatsFromHistory(p.history);
@@ -1743,13 +2075,13 @@ export default function Page() {
       });
       return rows;
     },
-    [players, playersTabSortKey, playersTabSortDir, ownership],
+    [draftPoolPlayers, playersTabSortKey, playersTabSortDir, ownership],
   );
 
   const filteredPlayers = useMemo(() => {
     const q = search.trim().toLowerCase();
     const sel = new Set(builder.selected);
-    return players
+    return draftPoolPlayers
       .filter((p) => (draftTeamFilter === "all" ? true : p.teamTier === Number(draftTeamFilter)))
       .filter((p) => (onlyAvailable ? p.available : true))
       .filter((p) => (!draftSquadOnly || sel.has(p.id)))
@@ -1758,7 +2090,7 @@ export default function Page() {
         if (a.available !== b.available) return a.available ? -1 : 1;
         return compareDraftPoolPlayers(a, b, draftSortKey, draftSortDir, ownership);
       });
-  }, [players, draftTeamFilter, onlyAvailable, draftSquadOnly, builder.selected, search, draftSortKey, draftSortDir, ownership]);
+  }, [draftPoolPlayers, draftTeamFilter, onlyAvailable, draftSquadOnly, builder.selected, search, draftSortKey, draftSortDir, ownership]);
 
   const weeklyChangeFeed = useMemo(() => {
     const weekly = snapshots.filter((s) => s.gameweek === currentGameweek);
@@ -1860,6 +2192,13 @@ export default function Page() {
     [teams, authUser],
   );
 
+  const mySavedTeamBudgetIssue = useMemo(() => {
+    if (!mySavedTeam || mySavedTeam.players.length !== SQUAD_SIZE) return null;
+    const status = squadBudgetStatus(mySavedTeam.players, BUDGET, (id) => playersById.get(id)?.price);
+    if (!status.overBudget) return null;
+    return status;
+  }, [mySavedTeam, playersById]);
+
   const mySavedTeamHydrateWire = useMemo(
     () => (mySavedTeam ? savedTeamHydrateWireKey(mySavedTeam) : ""),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- stable string from squad fields only
@@ -1892,6 +2231,20 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only when GW advances or saved squad arrives empty-handed
   }, [currentGameweek, mySavedTeam?.uid, mySavedTeam?.players?.join(","), playersById]);
 
+  /** When saved squad is over budget (form pricing), load it into Draft so managers can fix without rebuilding from scratch. */
+  useEffect(() => {
+    if (!authUser || !mySavedTeamBudgetIssue || locked) return;
+    const next = builderStateFromSavedTeam(mySavedTeam!, playersById);
+    if (next.selected.length !== SQUAD_SIZE) return;
+    setBuilder((prev) => {
+      const same =
+        prev.selected.length === next.selected.length &&
+        prev.selected.every((id, i) => id === next.selected[i]);
+      if (same && prev.teamName === next.teamName) return prev;
+      return { ...next, teamName: next.teamName || prev.teamName };
+    });
+  }, [authUser, mySavedTeam, mySavedTeamBudgetIssue, playersById, locked]);
+
   useEffect(() => {
     if (!authUser || ownerNameTouched) return;
     const fromTeam = mySavedTeam ? ownerFieldFromFirestore(mySavedTeam.ownerName) : undefined;
@@ -1899,33 +2252,32 @@ export default function Page() {
   }, [authUser, mySavedTeam, ownerNameTouched]);
 
   const transferSavePreview = useMemo(() => {
-    if (builder.selected.length !== SQUAD_SIZE) return null;
+    void lockClock;
+    return buildTransferSavePreview(mySavedTeam ?? null, builder.selected, currentGameweek, playersById, new Date());
+  }, [mySavedTeam, builder.selected, currentGameweek, playersById, lockClock]);
+
+  const transferBaselineSet = useMemo(() => {
+    if (!mySavedTeam || builder.selected.length !== SQUAD_SIZE) return null;
     void lockClock;
     const now = new Date();
-    const penaltiesApply = transferPenaltiesApplyForTeam(currentGameweek, mySavedTeam ?? null, now);
-    if (!mySavedTeam) {
-      return { kind: "first" as const, penaltiesApply };
-    }
-    const useLastSavedAsPreviewBaseline =
-      !penaltiesApply &&
-      transferPenaltiesApplyInGameweek(currentGameweek) &&
-      mySavedTeam.players.length === SQUAD_SIZE;
-    const baseline = useLastSavedAsPreviewBaseline
-      ? [...mySavedTeam.players]
-      : mySavedTeam.transferBaselinePlayers?.length === SQUAD_SIZE
-        ? mySavedTeam.transferBaselinePlayers
-        : mySavedTeam.players;
-    const F =
-      typeof mySavedTeam.freeTransfersAtGwStart === "number" && Number.isFinite(mySavedTeam.freeTransfersAtGwStart)
-        ? Math.max(0, Math.min(Math.floor(mySavedTeam.freeTransfersAtGwStart), MAX_FREE_TRANSFERS_IN_GW))
-        : MAX_FREE_TRANSFERS_IN_GW;
-    const T = countOutgoingPlayerChanges(baseline, builder.selected);
-    const extras = penaltiesApply ? transferExtrasAgainstFree(T, F) : 0;
-    const penaltyDue = penaltiesApply ? penaltyPointsForExtras(extras) : 0;
-    const penaltyDelta = penaltyDue - (mySavedTeam.transferPenaltyPointsApplied ?? 0);
-    const freeUsed = penaltiesApply ? Math.min(T, F) : T;
-    return { kind: "returning" as const, penaltiesApply, T, F, extras, penaltyDue, penaltyDelta, freeUsed };
+    const penaltiesApply = transferPenaltiesApplyForTeam(currentGameweek, mySavedTeam, now);
+    return new Set(squadTransferBaseline(mySavedTeam, penaltiesApply, currentGameweek));
   }, [mySavedTeam, builder.selected, currentGameweek, lockClock]);
+
+  const saveTeamButtonLabel = useMemo(() => {
+    if (savingTeam) return "Saving…";
+    if (!validation.checks.withinBudget) return "Fix squad over budget";
+    if (!transferSavePreview || locked) return "Save team to Firebase";
+    if (transferSavePreview.kind === "first") return "Save team (first squad)";
+    if (!transferSavePreview.penaltiesApply) return "Save team (no transfer charge)";
+    if (transferSavePreview.extras > 0) {
+      return `Save team (−${transferSavePreview.penaltyDue} league pts)`;
+    }
+    if (transferSavePreview.T > 0) {
+      return `Save team (${transferSavePreview.freeUsed} free transfer${transferSavePreview.freeUsed === 1 ? "" : "s"})`;
+    }
+    return "Save team to Firebase";
+  }, [savingTeam, transferSavePreview, locked, validation.checks.withinBudget]);
 
   const transferRulesFootnote = useMemo(() => {
     void lockClock;
@@ -2037,7 +2389,7 @@ export default function Page() {
     return latestChatMeta.createdAt.toMillis() > chatLastSeenAt.toMillis();
   }, [authUser, latestChatMeta, chatLastSeenAt]);
 
-  const bestSquad = useMemo(() => generateBestSquad(players), [players]);
+  const bestSquad = useMemo(() => generateBestSquad(draftPoolPlayers), [draftPoolPlayers]);
   const selectedCount = builder.selected.length;
   const budgetPct = Math.min(100, Math.max(0, (spend / BUDGET) * 100));
 
@@ -2086,6 +2438,10 @@ export default function Page() {
 
   async function saveTeam() {
     if (locked || !validation.ok || !authUser) return;
+    if (!validation.checks.withinBudget) {
+      setActionError(`Squad spend is ${money(validation.spend)} — cap is ${money(BUDGET)}. Remove or swap players before saving.`);
+      return;
+    }
     setSavingTeam(true);
     try {
       await runAction("Save team", async () => {
@@ -2550,7 +2906,7 @@ export default function Page() {
     /** Use admin table when it has unsaved edits so GW points match what you see in Admin. */
     const sourcePlayers = unsavedStats ? localPlayers : players;
     const playersByIdForGw = new Map(sourcePlayers.map((p) => [p.id, p]));
-    const updatedPlayers = sourcePlayers.map((p) => ({
+    const updatedPlayersRaw = sourcePlayers.map((p) => ({
       ...p,
       history: [
         ...(p.history ?? []),
@@ -2581,6 +2937,11 @@ export default function Page() {
       runOuts: 0,
       didNotBat: false,
       notOut: false,
+    }));
+    const pricingAfterGw = computeDynamicPricingMap(updatedPlayersRaw);
+    const updatedPlayers = updatedPlayersRaw.map((p) => ({
+      ...p,
+      price: pricingAfterGw.get(p.id)?.effectivePrice ?? p.price,
     }));
 
     try {
@@ -2649,6 +3010,7 @@ export default function Page() {
             didNotBat: false,
             notOut: false,
             history: p.history,
+            price: p.price,
           });
         }
 
@@ -3008,6 +3370,17 @@ export default function Page() {
           </div>
         </header>
 
+        {mySavedTeamBudgetIssue ? (
+          <div className="mt-4">
+            <SquadOverBudgetBanner
+              spend={mySavedTeamBudgetIssue.spend}
+              overBy={mySavedTeamBudgetIssue.overBy}
+              locked={locked}
+              onOpenDraft={() => setTab("draft")}
+            />
+          </div>
+        ) : null}
+
         <main className="mt-6 grid gap-5 lg:grid-cols-12">
 
           {/* ── Draft tab ── */}
@@ -3016,7 +3389,7 @@ export default function Page() {
               <section className="order-2 lg:order-1 lg:col-span-7">
                 <Card>
                   <CardHeader title="Draft pool"
-                    subtitle={`Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — max ${money(BUDGET)}. Draft cards show season-to-date stats and Σ points for scouting form. Your leaderboard only banks weeks you owned a player.`}
+                    subtitle={`Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — max ${money(BUDGET)}. Prices shift up to ±${MAX_FORM_PRICE_DELTA} within each XI tier from season + recent form (form dots). Listed prices reset when a gameweek ends. Your leaderboard only banks weeks you owned a player.`}
                     right={
                       <div className="flex max-w-[16rem] flex-col items-end gap-2 sm:max-w-none">
                         <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
@@ -3173,7 +3546,7 @@ export default function Page() {
                             <div className="min-w-0 flex-1">
                                 <div className="truncate text-sm font-semibold text-white">{p.name}</div>
                                 <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
-                                  <span className="font-medium text-zinc-200">{money(p.price)}</span>
+                                  <PriceWithForm price={p.price} basePrice={p.basePrice} priceDelta={p.priceDelta} />
                                   <span className="text-zinc-600">•</span>
                                   <span>{seasonStats.runs} runs</span>
                                   <span className="text-zinc-600">•</span>
@@ -3242,70 +3615,14 @@ export default function Page() {
                   <CardBody>
                     <div className="grid gap-3">
                       {authUser ? (
-                        <div className="rounded-xl border border-sky-500/35 bg-sky-950/25 p-3 ring-1 ring-sky-500/20">
-                          <div className="text-[11px] font-bold uppercase tracking-wider text-sky-300/90">Transfers · GW{currentGameweek}</div>
-                          {!mySavedTeam ? (
-                            <p className="mt-2 text-sm leading-relaxed text-zinc-300">
-                              {currentGameweek > 1 ? (
-                                <>
-                                  <strong className="text-zinc-100">Joining mid-season:</strong> your first save stores this squad. If that first save is in the current gameweek, you can keep changing freely until lineup lock; after lock, saves use your free transfers and can cost league points for extras — see rules.
-                                </>
-                              ) : (
-                                <>
-                                  First save creates your squad — <strong className="text-zinc-100">no transfer penalties</strong> until you have a saved team to compare against.
-                                </>
-                              )}
-                            </p>
-                          ) : freeTransfersAtLock !== null ? (
-                            <>
-                              <p className="mt-2 text-sm text-zinc-200">
-                                Free transfers at this lock:{" "}
-                                <strong className="tabular-nums text-white">{freeTransfersAtLock}</strong>
-                                <span className="text-zinc-500"> (cap {MAX_FREE_TRANSFERS_IN_GW} usable in one GW)</span>
-                              </p>
-                              {currentGameweek > 1 ? (
-                                <p className="mt-1 text-xs leading-relaxed text-zinc-400">
-                                  Season in progress — each player change beyond your free allowance costs{" "}
-                                  <strong className="text-amber-200/95">−{POINTS_PER_EXTRA_TRANSFER}</strong> league pts when you save (see breakdown below with a full squad).
-                                </p>
-                              ) : null}
-                              {!transferRulesFootnote.gw1Open && transferRulesFootnote.newJoinGrace ? (
-                                <p className="mt-1 text-xs leading-relaxed text-zinc-400">
-                                  <strong className="text-zinc-200">New this gameweek:</strong> unlimited player changes until lineup lock — then saves use your free transfers and{" "}
-                                  <strong className="text-amber-200/95">−{POINTS_PER_EXTRA_TRANSFER}</strong> league pts per extra change beyond that allowance.
-                                </p>
-                              ) : transferRulesFootnote.gw1Open ? (
-                                <p className="mt-1 text-xs leading-relaxed text-zinc-400">
-                                  <strong className="text-zinc-200">Opening gameweek (GW1):</strong> unlimited free player changes until we move to GW2 and normal transfer limits apply.
-                                </p>
-                              ) : selectedCount < SQUAD_SIZE ? (
-                                <p className="mt-1 text-xs leading-relaxed text-amber-200/90">
-                                  Select all {SQUAD_SIZE} players to preview extra-transfer league points (beyond your free allowance).
-                                </p>
-                              ) : transferSavePreview?.kind === "returning" ? (
-                                <div className="mt-2 space-y-1.5 border-t border-white/10 pt-2 text-sm text-zinc-200">
-                                  <p>
-                                    Outgoing changes vs saved baseline:{" "}
-                                    <strong className="tabular-nums text-white">{transferSavePreview.T}</strong>
-                                  </p>
-                                  <p className="text-zinc-300">
-                                    <strong className="tabular-nums text-emerald-200/95">{transferSavePreview.freeUsed}</strong> covered by free
-                                    {transferSavePreview.extras > 0 ? (
-                                      <>
-                                        {" · "}
-                                        <strong className="tabular-nums text-amber-200">{transferSavePreview.extras}</strong> extra at{" "}
-                                        <strong className="tabular-nums text-amber-200">−{POINTS_PER_EXTRA_TRANSFER}</strong> pts each →{" "}
-                                        <strong className="text-amber-200">−{transferSavePreview.penaltyDue}</strong> GW league pts total
-                                      </>
-                                    ) : (
-                                      <span className="text-emerald-200/90"> — no point deduction from transfers.</span>
-                                    )}
-                                  </p>
-                                </div>
-                              ) : null}
-                            </>
-                          ) : null}
-                        </div>
+                        <TransferImpactPanel
+                          currentGameweek={currentGameweek}
+                          selectedCount={selectedCount}
+                          freeAtLock={freeTransfersAtLock}
+                          preview={transferSavePreview}
+                          rules={transferRulesFootnote}
+                          locked={locked}
+                        />
                       ) : null}
 
                       <TextField
@@ -3369,7 +3686,10 @@ export default function Page() {
                                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
                                     <Pill tone="amber">{ROLE_LABEL[p.role]}</Pill>
                                     <Pill tone={p.teamTier === 1 ? "blue" : "neutral"}>{TEAM_TIER_SHORT[p.teamTier]}</Pill>
-                                    <span className="font-medium text-zinc-200">{money(p.price)}</span>
+                                    <PriceWithForm price={p.price} basePrice={p.basePrice} priceDelta={p.priceDelta} />
+                                    {transferBaselineSet && !transferBaselineSet.has(p.id) ? (
+                                      <Pill tone="green">Transfer in</Pill>
+                                    ) : null}
                                     {!p.available && <Pill tone="amber">Unavailable</Pill>}
                                   </div>
                                   <div className="mt-2 flex gap-2">
@@ -3407,48 +3727,13 @@ export default function Page() {
                         })}
                       </div>
 
-                      {validation.ok && transferSavePreview && !locked ? (
-                        <div className="rounded-xl bg-white/[0.04] px-3 py-2.5 text-xs leading-relaxed text-zinc-400 ring-1 ring-white/10">
-                          {transferSavePreview.kind === "first" ? (
-                            <span>
-                              First save: <strong className="text-zinc-200">no transfer charge</strong>. Your gameweek baseline becomes this squad.
-                            </span>
-                          ) : !transferSavePreview.penaltiesApply ? (
-                            <span>
-                              <strong className="text-zinc-200">Opening week:</strong> unlimited free player changes until GW2 transfer rules apply.
-                            </span>
-                          ) : transferSavePreview.extras === 0 ? (
-                            <span>
-                              vs GW baseline: <strong className="text-zinc-200">{transferSavePreview.T}</strong> player{" "}
-                              {transferSavePreview.T === 1 ? "change" : "changes"} —{" "}
-                              <strong className="text-zinc-200">{transferSavePreview.freeUsed}</strong> on free allowance (
-                              <strong className="text-zinc-200">{transferSavePreview.F}</strong> at lock) — no point hit.
-                            </span>
-                          ) : (
-                            <span>
-                              vs GW baseline: <strong className="text-zinc-200">{transferSavePreview.T}</strong> changes (
-                              <strong className="text-zinc-200">{transferSavePreview.freeUsed}</strong> free,{" "}
-                              <strong className="text-amber-200">{transferSavePreview.extras}</strong> extra at{" "}
-                              <strong className="text-amber-200">−{POINTS_PER_EXTRA_TRANSFER}</strong> each →{" "}
-                              <strong className="text-amber-200">−{transferSavePreview.penaltyDue}</strong> GW pts).
-                              {transferSavePreview.penaltyDelta !== 0 ? (
-                                <>
-                                  {" "}
-                                  This save moves cumulative by{" "}
-                                  <strong className={transferSavePreview.penaltyDelta > 0 ? "text-amber-200" : "text-emerald-200"}>
-                                    {transferSavePreview.penaltyDelta > 0 ? "−" : "+"}
-                                    {Math.abs(transferSavePreview.penaltyDelta)}
-                                  </strong>{" "}
-                                  pts.
-                                </>
-                              ) : null}
-                            </span>
-                          )}
-                          {currentGameweek > 1 ? (
-                            <span className="mt-2 block border-t border-white/10 pt-2 text-zinc-500">
-                              <strong className="text-zinc-300">Transfers before lock:</strong> anyone you bring in before {LINEUP_LOCK_SUMMARY} scores from this gameweek. After lock, new signings only count from the next gameweek.
-                            </span>
-                          ) : null}
+                      {validation.ok &&
+                      transferSavePreview?.kind === "returning" &&
+                      transferSavePreview.extras > 0 &&
+                      !locked ? (
+                        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-100 ring-1 ring-amber-500/30">
+                          Confirm save: this costs <strong className="text-amber-50">−{transferSavePreview.penaltyDue} league points</strong> (
+                          {transferSavePreview.extras} extra transfer{transferSavePreview.extras === 1 ? "" : "s"} at −{POINTS_PER_EXTRA_TRANSFER} each).
                         </div>
                       ) : null}
 
@@ -3456,10 +3741,14 @@ export default function Page() {
                         className={["rounded-2xl px-4 py-3 text-sm font-bold transition ring-1",
                           locked || !validation.ok || savingTeam
                             ? "bg-white/5 text-zinc-400 ring-white/10"
-                            : "bg-red-600 text-white ring-red-500/40 hover:bg-red-500"].join(" ")}>
-                        {savingTeam ? "Saving…" : "Save team to Firebase"}
+                            : transferSavePreview?.kind === "returning" && transferSavePreview.extras > 0
+                              ? "bg-amber-600 text-white ring-amber-500/50 hover:bg-amber-500"
+                              : "bg-red-600 text-white ring-red-500/40 hover:bg-red-500"].join(" ")}>
+                        {saveTeamButtonLabel}
                       </button>
-                      <div className="text-xs text-zinc-500">Each account has one saved team. Saving merges into Firebase; cumulative score includes automatic transfer hits.</div>
+                      <div className="text-xs text-zinc-500">
+                        Transfer summary above updates as you add or remove players. Saving merges into Firebase; league total includes transfer hits.
+                      </div>
                     </div>
                   </CardBody>
                 </Card>
@@ -3758,7 +4047,9 @@ export default function Page() {
                                 <td className="sticky left-0 z-30 bg-zinc-950 px-4 py-3 font-semibold text-white shadow-[1px_0_0_0_rgba(255,255,255,0.06)]">{p.name}</td>
                                 <td className="px-4 py-3 text-zinc-300">{ROLE_LABEL[p.role]}</td>
                                 <td className="px-4 py-3 text-zinc-300">{TEAM_TIER_SHORT[p.teamTier]}</td>
-                                <td className="px-4 py-3 text-right text-zinc-200">{money(p.price)}</td>
+                                <td className="px-4 py-3 text-right text-zinc-200">
+                                  <PriceWithForm price={p.price} basePrice={p.basePrice} priceDelta={p.priceDelta} />
+                                </td>
                                 <td className="border-l border-white/10 px-4 py-3 text-right text-zinc-200">{season.runs}</td>
                                 <td className="px-4 py-3 text-right text-zinc-200">{season.highScore}</td>
                                 <td className="px-4 py-3 text-right text-zinc-200">{season.fours}</td>
@@ -4315,6 +4606,20 @@ export default function Page() {
                                       onChange={(v) => editLocalPlayer(p.id, { price: v })}
                                       className="text-center"
                                     />
+                                    {(() => {
+                                      const pr = adminPricingMap.get(p.id);
+                                      if (!pr || pr.priceDelta === 0) return null;
+                                      return (
+                                        <div className="mt-1 text-center text-[10px] text-zinc-500">
+                                          Draft {money(pr.effectivePrice)}
+                                          <span className={pr.priceDelta > 0 ? " text-emerald-400" : " text-amber-400"}>
+                                            {" "}
+                                            ({pr.priceDelta > 0 ? "+" : ""}
+                                            {pr.priceDelta})
+                                          </span>
+                                        </div>
+                                      );
+                                    })()}
                                   </td>
                                   <td className="border-l border-white/10 px-2 py-3 align-middle">
                                     <div className="flex min-w-[4.5rem] flex-col items-center gap-1.5">
@@ -4618,7 +4923,7 @@ export default function Page() {
                       <div className="min-w-0">
                         <div className="truncate font-semibold text-white">{p.name}</div>
                         <div className="mt-1 flex flex-wrap gap-2 text-xs">
-                          <Pill>{money(p.price)}</Pill>
+                          <Pill>{money(p.price)}{p.priceDelta ? (p.priceDelta > 0 ? ` (+${p.priceDelta})` : ` (${p.priceDelta})`) : ""}</Pill>
                           <Pill tone="amber">{ROLE_LABEL[p.role]}</Pill>
                           <Pill tone={p.teamTier === 1 ? "blue" : "neutral"}>{TEAM_TIER_SHORT[p.teamTier]}</Pill>
                           {isC ? <Pill tone="red">C</Pill> : null}

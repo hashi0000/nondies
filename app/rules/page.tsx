@@ -19,6 +19,7 @@ import {
   WICKET_HAUL_BONUS,
   fantasyPointsBreakdown,
 } from "@/lib/fantasyPoints";
+import { MAX_FORM_PRICE_DELTA, PRICE_BAND } from "@/lib/dynamicPricing";
 
 export const metadata = {
   title: "How to Play — Nondies Fantasy League",
@@ -247,8 +248,9 @@ export default function RulesPage() {
                       <strong className="text-white">not</strong> implemented.
                     </li>
                     <li>
-                      <strong className="text-white">Price rises &amp; falls:</strong> full rules may award extra transfer budget when a player you own rises in price, and claw back budget on falls.
-                      The app <strong className="text-white">does not</strong> track purchase price or a separate transfer budget — only the fixed £{BUDGET} cap when saving.
+                      <strong className="text-white">Dynamic prices:</strong> each player&apos;s draft price can move up to ±{MAX_FORM_PRICE_DELTA} from their listed price within their XI tier (
+                      1st XI £{PRICE_BAND[1].min}–{PRICE_BAND[1].max}, 2nd XI £{PRICE_BAND[2].min}–{PRICE_BAND[2].max}) based on season fantasy points and recent form (last 3 gameweeks).
+                      When the admin <strong className="text-white">ends a gameweek</strong>, listed prices are saved at the new level. The app does <strong className="text-white">not</strong> track what you paid when you signed a player — only the current £{BUDGET} cap when saving.
                     </li>
                   </ul>
                 </Card>
@@ -304,7 +306,7 @@ export default function RulesPage() {
                           {
                             n: "2",
                             title: <>Stay under the <strong className="text-white">£{BUDGET}</strong> squad cap.</>,
-                            note: "Each player has a listed price; your total spend cannot exceed the cap.",
+                            note: "Each player has a form-adjusted price (see form dots on the Players tab); your total spend cannot exceed the cap.",
                           },
                           {
                             n: "3",
@@ -344,7 +346,7 @@ export default function RulesPage() {
                           `You can replace your whole squad any time the draft is unlocked (until ${LINEUP_LOCK_SUMMARY}).`,
                           "Leaderboard totals are cumulative — earlier weeks still count.",
                           "When the admin ends a gameweek, that week’s points are banked and the next gameweek opens.",
-                          "Player prices and 1st XI / 2nd XI tags change only when an admin saves them — never automatically.",
+                          "Listed player prices update when a gameweek ends (from form); admins can still override listed price and 1st / 2nd XI in Admin.",
                           "On the Draft tab, use All squads, 1st XI only, or 2nd XI only to filter the pool.",
                         ].map((text) => (
                           <li key={text} className="flex gap-3">

@@ -3450,10 +3450,18 @@ export default function Page() {
               {fsError ? <Pill tone="amber">Sync issue: {fsError}</Pill> : null}
               {actionError ? <Pill tone="amber">{actionError}</Pill> : null}
               <Pill tone="red"><Users className="h-3.5 w-3.5" />{selectedCount}/{SQUAD_SIZE}</Pill>
-              <Pill tone={spend > squadBudget ? "red" : "neutral"} title={dynamicBudget.floorCost != null ? `Cap = cheapest legal squad (${money(dynamicBudget.floorCost)}) + ${money(dynamicBudget.headroom)} headroom` : undefined}>
-                <span className="font-medium">{money(spend)}</span>
-                <span className="text-zinc-400">/ {money(squadBudget)}</span>
-              </Pill>
+              <span
+                title={
+                  dynamicBudget.floorCost != null
+                    ? `Cap = cheapest legal squad (${money(dynamicBudget.floorCost)}) + ${money(dynamicBudget.headroom)} headroom`
+                    : undefined
+                }
+              >
+                <Pill tone={spend > squadBudget ? "red" : "neutral"}>
+                  <span className="font-medium">{money(spend)}</span>
+                  <span className="text-zinc-400">/ {money(squadBudget)}</span>
+                </Pill>
+              </span>
               <Pill tone={locked ? "amber" : "green"}>
                 {locked ? <Lock className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}
                 {locked ? `Locked (${formatLockTime(lockDate)})` : `Locks ${formatLockTime(lockDate)}`}

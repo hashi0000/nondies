@@ -83,8 +83,44 @@ function weekPoints(rec: PricingHistoryWeek): number {
   });
 }
 
-function playedHistoryWeeks(history: PricingHistoryWeek[] | undefined): PricingHistoryWeek[] {
+export function playedHistoryWeeks(history: PricingHistoryWeek[] | undefined): PricingHistoryWeek[] {
   return (history ?? []).filter((h) => !h.didNotPlay);
+}
+
+export function hasPlayedFormWeeks(p: PlayerForPricing): boolean {
+  return playedHistoryWeeks(p.history).length > 0;
+}
+
+/** All-zero week that was wrongly tagged DNB — treat as did not play for form/pricing. */
+export function historyWeekLooksLikeDidNotPlay(h: PricingHistoryWeek): boolean {
+  if (h.didNotPlay) return true;
+  const runs = Number(h.runs) || 0;
+  const wickets = Number(h.wickets) || 0;
+  const fours = Number(h.fours) || 0;
+  const sixes = Number(h.sixes) || 0;
+  const maidens = Number(h.maidens) || 0;
+  const catches = Number(h.catches) || 0;
+  const wkCatches = Number(h.wkCatches) || 0;
+  const stumpings = Number(h.stumpings) || 0;
+  const runOuts = Number(h.runOuts) || 0;
+  const allZero =
+    runs === 0 &&
+    wickets === 0 &&
+    fours === 0 &&
+    sixes === 0 &&
+    maidens === 0 &&
+    catches === 0 &&
+    wkCatches === 0 &&
+    stumpings === 0 &&
+    runOuts === 0;
+  return allZero && Boolean(h.didNotBat);
+}
+
+export function repairHistoryDidNotPlayWeeks<T extends PricingHistoryWeek>(history: T[] | undefined): T[] {
+  return (history ?? []).map((h) => {
+    if (!historyWeekLooksLikeDidNotPlay(h)) return h;
+    return { ...h, didNotPlay: true, didNotBat: false, points: 0 };
+  });
 }
 
 /** Season total + weighted recent gameweeks (higher = hotter form). Did-not-play weeks are ignored. */
@@ -115,14 +151,22 @@ function adjustmentFromFormRank(rankIndex: number, poolSize: number): number {
 export function computePlayerPricing(p: PlayerForPricing, pool: PlayerForPricing[]): PlayerPricing {
   const tier = p.teamTier === 1 ? 1 : 2;
   const basePrice = Math.max(1, Math.round(Number(p.price) || 1));
-  const tierPeers = pool.filter((x) => (x.teamTier === 1 ? 1 : 2) === tier);
+  if (Boolean(p.didNotPlay) || !hasPlayedFormWeeks(p)) {
+    return { basePrice, effectivePrice: basePrice, priceDelta: 0, formScore: 0 };
+  }
+  const tierPeers = pool.filter(
+    (x) => (x.teamTier === 1 ? 1 : 2) === tier && hasPlayedFormWeeks(x) && !x.didNotPlay,
+  );
+  if (tierPeers.length === 0) {
+    return { basePrice, effectivePrice: basePrice, priceDelta: 0, formScore: formScoreForPlayer(p) };
+  }
   const scored = tierPeers
     .map((peer) => ({ id: peer.id, formScore: formScoreForPlayer(peer) }))
     .sort((a, b) => b.formScore - a.formScore || a.id - b.id);
-  const rankIndex = Math.max(
-    0,
-    scored.findIndex((row) => row.id === p.id),
-  );
+  const rankIndex = scored.findIndex((row) => row.id === p.id);
+  if (rankIndex < 0) {
+    return { basePrice, effectivePrice: basePrice, priceDelta: 0, formScore: formScoreForPlayer(p) };
+  }
   const delta = adjustmentFromFormRank(rankIndex, scored.length);
   const effectivePrice = clampPrice(basePrice + delta, tier);
   return {

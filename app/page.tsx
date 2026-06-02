@@ -80,6 +80,7 @@ import {
   computeDynamicBudget,
   computeDynamicPricingMap,
   MAX_FORM_PRICE_DELTA,
+  repairHistoryDidNotPlayWeeks,
   squadBudgetStatus,
   withEffectivePrices,
 } from "@/lib/dynamicPricing";
@@ -637,6 +638,28 @@ function clonePlayerAdminSnapshot(p: Player): Player {
   return {
     ...p,
     history: Array.isArray(p.history) ? p.history.map((h) => ({ ...h })) : [],
+  };
+}
+
+function applyDidNotPlayToPlayer(p: Player, on: boolean): Player {
+  if (!on) {
+    return { ...p, didNotPlay: false };
+  }
+  return {
+    ...p,
+    didNotPlay: true,
+    didNotBat: false,
+    notOut: false,
+    runs: 0,
+    fours: 0,
+    sixes: 0,
+    wickets: 0,
+    maidens: 0,
+    catches: 0,
+    wkCatches: 0,
+    stumpings: 0,
+    runOuts: 0,
+    history: repairHistoryDidNotPlayWeeks(p.history),
   };
 }
 
@@ -2622,6 +2645,39 @@ export default function Page() {
     setPlayedPickerOpen(true);
   }
 
+  function toggleDidNotPlay(id: number, on: boolean) {
+    setLocalPlayers((prev) => prev.map((p) => (p.id === id ? applyDidNotPlayToPlayer(p, on) : p)));
+    if (on) {
+      setPlayedPickerIds((prev) => prev.filter((x) => x !== id));
+    }
+    setUnsavedStats(true);
+    setActionError(null);
+  }
+
+  function retrofixHistoryDidNotPlay() {
+    setLocalPlayers((prev) =>
+      prev.map((p) => {
+        const history = repairHistoryDidNotPlayWeeks(p.history);
+        const liveAllZero =
+          p.runs === 0 &&
+          p.fours === 0 &&
+          p.sixes === 0 &&
+          p.wickets === 0 &&
+          p.maidens === 0 &&
+          p.catches === 0 &&
+          p.wkCatches === 0 &&
+          p.stumpings === 0 &&
+          p.runOuts === 0;
+        if (p.didNotPlay || (liveAllZero && p.didNotBat)) {
+          return applyDidNotPlayToPlayer({ ...p, history }, true);
+        }
+        return { ...p, history };
+      }),
+    );
+    setUnsavedStats(true);
+    setActionError(null);
+  }
+
   function applyPlayedPicker() {
     if (playedPickerIds.length !== EXPECTED_PLAYERS_PER_GW) {
       setActionError(
@@ -4568,6 +4624,14 @@ export default function Page() {
                             >
                               Select 22 who played
                             </button>
+                            <button
+                              type="button"
+                              onClick={retrofixHistoryDidNotPlay}
+                              className="inline-flex items-center gap-2 rounded-xl bg-zinc-600/20 px-3 py-2 text-xs font-semibold text-zinc-200 ring-1 ring-zinc-500/35 transition hover:bg-zinc-600/30"
+                              title="Convert all-zero DNB weeks in history to Did not play (keeps listed base price)"
+                            >
+                              Retrofix DNP in history
+                            </button>
                             <button type="button" onClick={() => void saveStats()} disabled={!unsavedStats || savingStats}
                               className={["inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold ring-1 transition",
                                 savedStatsFlash ? "bg-emerald-600/20 text-emerald-300 ring-emerald-500/30"
@@ -4682,7 +4746,15 @@ export default function Page() {
                                     />
                                     {(() => {
                                       const pr = adminPricingMap.get(p.id);
-                                      if (!pr || pr.priceDelta === 0) return null;
+                                      if (!pr) return null;
+                                      if (p.didNotPlay) {
+                                        return (
+                                          <div className="mt-1 text-center text-[10px] text-zinc-500">
+                                            Draft {money(pr.effectivePrice)} · base (DNP)
+                                          </div>
+                                        );
+                                      }
+                                      if (pr.priceDelta === 0) return null;
                                       return (
                                         <div className="mt-1 text-center text-[10px] text-zinc-500">
                                           Draft {money(pr.effectivePrice)}
@@ -4709,7 +4781,16 @@ export default function Page() {
                                         }
                                         className="text-center"
                                       />
-                                      <div className="flex items-center gap-2">
+                                      <div className="flex flex-wrap items-center justify-center gap-2">
+                                        <label className="flex cursor-pointer items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
+                                          <input
+                                            type="checkbox"
+                                            checked={Boolean(p.didNotPlay)}
+                                            onChange={(e) => toggleDidNotPlay(p.id, e.target.checked)}
+                                            className="h-3.5 w-3.5 rounded border-white/20 bg-white/10 text-zinc-400 focus:ring-zinc-500/50"
+                                          />
+                                          DNP
+                                        </label>
                                         <label className="flex cursor-pointer items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-sky-300/90">
                                           <input
                                             type="checkbox"

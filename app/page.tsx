@@ -1908,14 +1908,22 @@ export default function Page() {
     }
   }
 
-  // Firebase auth
+  // Firebase auth — wait for initial persistence restore before sending to /login
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setAuthUser(u);
-      setAuthReady(true);
-      if (!u) router.replace("/login");
+    let unsub: (() => void) | undefined;
+    let cancelled = false;
+    void auth.authStateReady().then(() => {
+      if (cancelled) return;
+      unsub = onAuthStateChanged(auth, (u) => {
+        setAuthUser(u);
+        setAuthReady(true);
+        if (!u) router.replace("/login");
+      });
     });
-    return () => unsub();
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
   }, [router]);
 
   // Ensure createdBy is present; only backfill ownerName from Auth if document has none.

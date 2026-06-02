@@ -108,10 +108,18 @@ export default function LoginPage() {
   }, [email, mode, name, password, showNameField]);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      if (u) router.replace("/");
+    let unsub: (() => void) | undefined;
+    let cancelled = false;
+    void auth.authStateReady().then(() => {
+      if (cancelled) return;
+      unsub = onAuthStateChanged(auth, (u) => {
+        if (u) router.replace("/");
+      });
     });
-    return () => unsub();
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
   }, [router]);
 
   async function handleGoogle() {

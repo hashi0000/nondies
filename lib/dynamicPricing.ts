@@ -1,4 +1,12 @@
 import { calculatePoints } from "@/lib/fantasyPoints";
+import {
+  BUDGET_BASE,
+  DYNAMIC_BUDGET_HEADROOM,
+  DYNAMIC_BUDGET_MAX,
+  DYNAMIC_BUDGET_MIN,
+  SQUAD_ROLES,
+  type PlayerRole,
+} from "@/lib/leagueConfig";
 
 /** Price bands per squad tier (1st / 2nd XI). */
 export const PRICE_BAND: Record<1 | 2, { min: number; max: number }> = {
@@ -159,4 +167,56 @@ export function squadBudgetStatus(
   const spend = playerIds.reduce((s, id) => s + (priceForId(id) ?? 0), 0);
   const overBy = Math.max(0, spend - budget);
   return { spend, overBudget: overBy > 0, overBy };
+}
+
+export type PlayerForBudget = PlayerForPricing & {
+  role: PlayerRole;
+  available?: boolean;
+};
+
+/** Cheapest spend for a legal 2-2-2-1 squad at current prices (available players only). */
+export function computeMinValidSquadCost(
+  players: PlayerForBudget[],
+  priceFor: (p: PlayerForBudget) => number,
+): number | null {
+  const pool = players.filter((p) => p.available !== false);
+  const byRole: Record<PlayerRole, number[]> = { bat: [], ar: [], bowl: [], wk: [] };
+  for (const p of pool) {
+    byRole[p.role].push(priceFor(p));
+  }
+  for (const role of Object.keys(byRole) as PlayerRole[]) {
+    byRole[role].sort((a, b) => a - b);
+    if (byRole[role].length < SQUAD_ROLES[role]) return null;
+  }
+  let cost = 0;
+  for (const role of Object.keys(SQUAD_ROLES) as PlayerRole[]) {
+    const n = SQUAD_ROLES[role];
+    for (let i = 0; i < n; i++) cost += byRole[role][i]!;
+  }
+  return cost;
+}
+
+export type DynamicBudgetResult = {
+  budget: number;
+  floorCost: number | null;
+  headroom: number;
+};
+
+/**
+ * Squad cap tracks the market: cheapest legal squad + fixed headroom (clamped).
+ * Still blocks all–1st-XI stacks; rises when form pushes prices up.
+ */
+export function computeDynamicBudget(
+  players: PlayerForBudget[],
+  pricingMap?: Map<number, PlayerPricing>,
+): DynamicBudgetResult {
+  const priceFor = (p: PlayerForBudget) => pricingMap?.get(p.id)?.effectivePrice ?? p.price;
+  const floorCost = computeMinValidSquadCost(players, priceFor);
+  const headroom = DYNAMIC_BUDGET_HEADROOM;
+  if (floorCost == null) {
+    return { budget: BUDGET_BASE, floorCost: null, headroom };
+  }
+  const raw = floorCost + headroom;
+  const budget = Math.max(DYNAMIC_BUDGET_MIN, Math.min(DYNAMIC_BUDGET_MAX, Math.round(raw)));
+  return { budget, floorCost, headroom };
 }

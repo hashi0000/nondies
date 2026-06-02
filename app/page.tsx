@@ -47,7 +47,6 @@ import { auth, db, firebaseProjectId } from "@/lib/firebase";
 import { PlayerCompareCharts } from "@/components/PlayerCompareCharts";
 import { calculatePoints, clampNonNegativeInt, fantasyPointsBreakdown } from "@/lib/fantasyPoints";
 import {
-  BUDGET,
   FREE_TRANSFERS_PER_WEEK,
   LINEUP_LOCK_HOUR,
   LINEUP_LOCK_MINUTE,
@@ -78,6 +77,7 @@ import {
   type GwTeamsDoc,
 } from "@/lib/gwTeams";
 import {
+  computeDynamicBudget,
   computeDynamicPricingMap,
   MAX_FORM_PRICE_DELTA,
   squadBudgetStatus,
@@ -384,11 +384,13 @@ function money(n: number) {
 function SquadOverBudgetBanner({
   spend,
   overBy,
+  budget,
   locked,
   onOpenDraft,
 }: {
   spend: number;
   overBy: number;
+  budget: number;
   locked: boolean;
   onOpenDraft: () => void;
 }) {
@@ -397,7 +399,7 @@ function SquadOverBudgetBanner({
       <div className="font-semibold text-amber-50">Your saved squad is over budget</div>
       <p className="mt-1.5 leading-relaxed text-amber-100/90">
         Dynamic pricing is live. Your Firestore squad costs <strong className="text-white">{money(spend)}</strong> (cap{" "}
-        <strong className="text-white">{money(BUDGET)}</strong>, <strong className="text-white">{money(overBy)}</strong> over).
+        <strong className="text-white">{money(budget)}</strong>, <strong className="text-white">{money(overBy)}</strong> over).
         {locked
           ? ` You can edit again after ${LINEUP_LOCK_SUMMARY} — then remove or swap players and save.`
           : " Open Draft, adjust your squad, and save — you cannot save until spend is within the cap."}
@@ -957,8 +959,9 @@ function generateBestSquad(players: Player[]) {
 function validateTeam(args: {
   teamName: string; selected: number[]; captain: number | null;
   viceCaptain: number | null; keeper: number | null; byId: Map<number, Player>;
+  budget: number;
 }) {
-  const { teamName, selected, captain, viceCaptain, keeper, byId } = args;
+  const { teamName, selected, captain, viceCaptain, keeper, byId, budget } = args;
   const set = new Set(selected);
   const sel = selected.map((id) => byId.get(id)).filter(Boolean) as Player[];
   const spend = sel.reduce((s, p) => s + p.price, 0);
@@ -971,7 +974,7 @@ function validateTeam(args: {
     captain: captain !== null && set.has(captain),
     viceCaptain: viceCaptain !== null && set.has(viceCaptain),
     keeper: keeper !== null && set.has(keeper) && keeperIsWkRole,
-    withinBudget: spend <= BUDGET,
+    withinBudget: spend <= budget,
     uniqueLeadership: captain !== null && viceCaptain !== null ? captain !== viceCaptain : true,
     allAvailable: sel.every((p) => p.available),
     composition: compositionOk,
@@ -988,7 +991,7 @@ function validateTeam(args: {
   }
   if (!checks.withinBudget) {
     problems.push(
-      `Stay within budget (${money(BUDGET)}). Squad costs ${money(spend)} at current form-adjusted prices — swap or remove players.`,
+      `Stay within budget (${money(budget)}). Squad costs ${money(spend)} at current form-adjusted prices — swap or remove players.`,
     );
   }
   if (!checks.captain) problems.push("Select a captain (C).");
@@ -1979,6 +1982,11 @@ export default function Page() {
     () => withEffectivePrices(players, draftPricingMap),
     [players, draftPricingMap],
   );
+  const dynamicBudget = useMemo(
+    () => computeDynamicBudget(draftPoolPlayers, draftPricingMap),
+    [draftPoolPlayers, draftPricingMap],
+  );
+  const squadBudget = dynamicBudget.budget;
   const playersById = useMemo(
     () => new Map(draftPoolPlayers.map((p) => [p.id, p])),
     [draftPoolPlayers],
@@ -2212,8 +2220,8 @@ export default function Page() {
   const validation = useMemo(() => validateTeam({
     teamName: builder.teamName, selected: builder.selected,
     captain: builder.captain, viceCaptain: builder.viceCaptain,
-    keeper: builder.keeper, byId: playersById,
-  }), [builder, playersById]);
+    keeper: builder.keeper, byId: playersById, budget: squadBudget,
+  }), [builder, playersById, squadBudget]);
 
   const mySavedTeam = useMemo(
     () => (authUser ? teams.find((t) => t.uid === authUser.uid) : undefined),
@@ -2222,10 +2230,10 @@ export default function Page() {
 
   const mySavedTeamBudgetIssue = useMemo(() => {
     if (!mySavedTeam || mySavedTeam.players.length !== SQUAD_SIZE) return null;
-    const status = squadBudgetStatus(mySavedTeam.players, BUDGET, (id) => playersById.get(id)?.price);
+    const status = squadBudgetStatus(mySavedTeam.players, squadBudget, (id) => playersById.get(id)?.price);
     if (!status.overBudget) return null;
     return status;
-  }, [mySavedTeam, playersById]);
+  }, [mySavedTeam, playersById, squadBudget]);
 
   const mySavedTeamHydrateWire = useMemo(
     () => (mySavedTeam ? savedTeamHydrateWireKey(mySavedTeam) : ""),
@@ -2419,7 +2427,7 @@ export default function Page() {
 
   const bestSquad = useMemo(() => generateBestSquad(draftPoolPlayers), [draftPoolPlayers]);
   const selectedCount = builder.selected.length;
-  const budgetPct = Math.min(100, Math.max(0, (spend / BUDGET) * 100));
+  const budgetPct = Math.min(100, Math.max(0, (spend / squadBudget) * 100));
 
   /** Squad panel order = pick order (easier to edit than price-sorted). */
   const selectedInPickOrder = useMemo(
@@ -2442,7 +2450,7 @@ export default function Page() {
           keeper: prev.keeper === id ? null : prev.keeper };
       }
       const subSpend = prev.selected.reduce((s, pid) => s + (playersById.get(pid)?.price ?? 0), 0);
-      if (!p.available || prev.selected.length >= SQUAD_SIZE || subSpend + p.price > BUDGET) return prev;
+      if (!p.available || prev.selected.length >= SQUAD_SIZE || subSpend + p.price > squadBudget) return prev;
       if (!canAddPlayerForRoles(id, prev.selected, playersById)) return prev;
       return { ...prev, selected: [...prev.selected, id] };
     });
@@ -2467,7 +2475,7 @@ export default function Page() {
   async function saveTeam() {
     if (locked || !validation.ok || !authUser) return;
     if (!validation.checks.withinBudget) {
-      setActionError(`Squad spend is ${money(validation.spend)} — cap is ${money(BUDGET)}. Remove or swap players before saving.`);
+      setActionError(`Squad spend is ${money(validation.spend)} — cap is ${money(squadBudget)}. Remove or swap players before saving.`);
       return;
     }
     setSavingTeam(true);
@@ -3386,9 +3394,9 @@ export default function Page() {
               {fsError ? <Pill tone="amber">Sync issue: {fsError}</Pill> : null}
               {actionError ? <Pill tone="amber">{actionError}</Pill> : null}
               <Pill tone="red"><Users className="h-3.5 w-3.5" />{selectedCount}/{SQUAD_SIZE}</Pill>
-              <Pill tone={spend > BUDGET ? "red" : "neutral"}>
+              <Pill tone={spend > squadBudget ? "red" : "neutral"} title={dynamicBudget.floorCost != null ? `Cap = cheapest legal squad (${money(dynamicBudget.floorCost)}) + ${money(dynamicBudget.headroom)} headroom` : undefined}>
                 <span className="font-medium">{money(spend)}</span>
-                <span className="text-zinc-400">/ {money(BUDGET)}</span>
+                <span className="text-zinc-400">/ {money(squadBudget)}</span>
               </Pill>
               <Pill tone={locked ? "amber" : "green"}>
                 {locked ? <Lock className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}
@@ -3433,6 +3441,7 @@ export default function Page() {
             <SquadOverBudgetBanner
               spend={mySavedTeamBudgetIssue.spend}
               overBy={mySavedTeamBudgetIssue.overBy}
+              budget={squadBudget}
               locked={locked}
               onOpenDraft={() => setTab("draft")}
             />
@@ -3447,7 +3456,7 @@ export default function Page() {
               <section className="order-2 lg:order-1 lg:col-span-7">
                 <Card>
                   <CardHeader title="Draft pool"
-                    subtitle={`Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — max ${money(BUDGET)}. Prices shift up to ±${MAX_FORM_PRICE_DELTA} within each XI tier from season + recent form (form dots). Listed prices reset when a gameweek ends. Your leaderboard only banks weeks you owned a player.`}
+                    subtitle={`Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — cap ${money(squadBudget)} (cheapest legal squad ${dynamicBudget.floorCost != null ? money(dynamicBudget.floorCost) : "—"} + ${money(dynamicBudget.headroom)}). Prices shift ±${MAX_FORM_PRICE_DELTA} with form. Listed prices update when a gameweek ends.`}
                     right={
                       <div className="flex max-w-[16rem] flex-col items-end gap-2 sm:max-w-none">
                         <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
@@ -3534,12 +3543,12 @@ export default function Page() {
                         <div className="mt-2 flex items-baseline justify-between gap-3">
                           <div className="text-sm text-zinc-200">
                             <span className="font-semibold text-white">{money(spend)}</span>{" "}
-                            <span className="text-zinc-400">/ {money(BUDGET)}</span>
+                            <span className="text-zinc-400">/ {money(squadBudget)}</span>
                           </div>
                           <div className="text-xs text-zinc-500">{Math.round(budgetPct)}%</div>
                         </div>
                         <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-white/10">
-                          <div className={["h-2 rounded-full", spend > BUDGET ? "bg-red-500" : "bg-red-600"].join(" ")} style={{ width: `${budgetPct}%` }} />
+                          <div className={["h-2 rounded-full", spend > squadBudget ? "bg-red-500" : "bg-red-600"].join(" ")} style={{ width: `${budgetPct}%` }} />
                         </div>
                       </div>
                     </div>
@@ -3573,7 +3582,7 @@ export default function Page() {
                         </div>
                       ) : filteredPlayers.map((p) => {
                         const selected = builder.selected.includes(p.id);
-                        const wouldBust = !selected && spend + p.price > BUDGET;
+                        const wouldBust = !selected && spend + p.price > squadBudget;
                         const full = !selected && selectedCount >= SQUAD_SIZE;
                         const roleFull = !selected && !canAddPlayerForRoles(p.id, builder.selected, playersById);
                         const disabled = locked || !p.available || wouldBust || full || roleFull;
@@ -3708,7 +3717,7 @@ export default function Page() {
                               `Bat ${draftRoleCounts.bat}/${SQUAD_ROLES.bat} · AR ${draftRoleCounts.ar}/${SQUAD_ROLES.ar} · Bowl ${draftRoleCounts.bowl}/${SQUAD_ROLES.bowl} · WK ${draftRoleCounts.wk}/${SQUAD_ROLES.wk}`,
                               validation.checks.composition,
                             ],
-                            ["Budget", `${money(validation.spend)} / ${money(BUDGET)}`, validation.checks.withinBudget],
+                            ["Budget", `${money(validation.spend)} / ${money(squadBudget)}`, validation.checks.withinBudget],
                             ["Captain", builder.captain ? "Selected" : "Missing", validation.checks.captain],
                             ["Vice-captain", builder.viceCaptain ? "Selected" : "Missing", validation.checks.viceCaptain],
                             ["Wicketkeeper", builder.keeper ? "On WK player" : "Missing", validation.checks.keeper],

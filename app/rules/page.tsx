@@ -2,7 +2,10 @@ import Image from "next/image";
 import Link from "next/link";
 import { ArrowLeft, Award, Calendar, ChevronRight, Crown, Dices, Gavel, Layers, Repeat, Star, TrendingUp, Trophy, Users, Zap } from "lucide-react";
 import {
-  BUDGET,
+  BUDGET_BASE,
+  DYNAMIC_BUDGET_HEADROOM,
+  DYNAMIC_BUDGET_MAX,
+  DYNAMIC_BUDGET_MIN,
   FREE_TRANSFERS_PER_WEEK,
   LINEUP_LOCK_SUMMARY,
   LINEUP_LOCK_SUMMARY_SHORT,
@@ -141,7 +144,7 @@ export default function RulesPage() {
 
           <p className="mt-5 text-base leading-relaxed text-zinc-400 max-w-2xl">
             Sign in (Google or email), then pick <strong className="text-zinc-200">{SQUAD_SIZE} players</strong> from the club list within a{" "}
-            <strong className="text-zinc-200">£{BUDGET}</strong> squad cap (compact squads — same spirit as larger fantasy games that use £55m for 11 or £35m for 6).
+            <strong className="text-zinc-200">dynamic squad cap</strong> (usually £{DYNAMIC_BUDGET_MIN}–£{DYNAMIC_BUDGET_MAX}; see below — compact squads like larger games at £55m/11 or £35m/6).
             Players are tagged <strong className="text-zinc-200">1st XI</strong> or <strong className="text-zinc-200">2nd XI</strong> with different price bands so you must mix tiers.
             Assign captain, vice-captain and wicketkeeper, save to Firebase, and earn points from stats the admin records each gameweek.{" "}
             <strong className="text-zinc-300">Transfers:</strong>{" "}
@@ -154,7 +157,7 @@ export default function RulesPage() {
         {/* Quick stats */}
         <div className="mb-10 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           <StatCard value={String(SQUAD_SIZE)} label="Players per squad" sub="1 captain · 1 VC · 1 WK" />
-          <StatCard value={`£${BUDGET}`} label="Squad cap" sub="1st XI + 2nd XI mix" />
+          <StatCard value={`£${DYNAMIC_BUDGET_MIN}–${DYNAMIC_BUDGET_MAX}`} label="Squad cap" sub={`Dynamic · +£${DYNAMIC_BUDGET_HEADROOM} headroom`} />
           <StatCard value={`−${POINTS_PER_EXTRA_TRANSFER}`} label="Extra transfer" sub={`${FREE_TRANSFERS_PER_WEEK} free/wk · ${MAX_BANKED_FREE_TRANSFERS} max banked`} />
           <StatCard value="2×" label="Captain bonus" sub="VC gets 1.5×" />
           <StatCard value="∞" label="Gameweeks" sub="Points carry over" />
@@ -188,7 +191,7 @@ export default function RulesPage() {
                 <p className="text-sm leading-relaxed text-zinc-300">
                   Nondies Fantasy League runs in the browser against <strong className="text-white">Firebase</strong> (Firestore).
                   Each signed-in account has <strong className="text-white">one saved team</strong>. You pick{" "}
-                  <strong className="text-white">{SQUAD_SIZE} players</strong> from the pool within <strong className="text-white">£{BUDGET}</strong>,
+                  <strong className="text-white">{SQUAD_SIZE} players</strong> from the pool within the <strong className="text-white">dynamic squad cap</strong> shown in Draft,
                   choose a <strong className="text-white">captain</strong> (2× points), <strong className="text-white">vice-captain</strong> (1.5×) and a{" "}
                   <strong className="text-white">wicketkeeper</strong> (required to save), then save. The app locks line-ups after{" "}
                   <strong className="text-white">{LINEUP_LOCK_SUMMARY}</strong> (local time) each week.
@@ -213,9 +216,9 @@ export default function RulesPage() {
                   <ul className="grid gap-2 text-sm text-zinc-300 list-disc pl-4">
                     <li><strong className="text-white">One team per registered user.</strong> The app enforces a single Firestore document per account.</li>
                     <li>
-                      <strong className="text-white">Squad value cap:</strong> in the app, <strong className="text-white">{SQUAD_SIZE} players</strong> and{" "}
-                      <strong className="text-white">£{BUDGET}</strong> maximum spend (scaled from a traditional £100 cap for 11 players). In a larger ruleset this
-                      corresponds to ideas like <strong className="text-white">£55m for 11</strong> or <strong className="text-white">£35m for 6</strong> — here we use a smaller squad and simple £ prices.
+                      <strong className="text-white">Dynamic squad cap:</strong> <strong className="text-white">{SQUAD_SIZE} players</strong> within a cap that moves with prices —{" "}
+                      <strong className="text-white">cheapest legal 2-2-2-1 squad + £{DYNAMIC_BUDGET_HEADROOM} headroom</strong>, clamped between £{DYNAMIC_BUDGET_MIN} and £{DYNAMIC_BUDGET_MAX}.
+                      You still cannot stack seven 1st-XI premiums; you must mix tiers. Season start is about £{BUDGET_BASE}.
                     </li>
                     <li>
                       <strong className="text-white">When scoring starts:</strong> league policy is that teams must be submitted before the season (or first gameweek) opens
@@ -250,7 +253,7 @@ export default function RulesPage() {
                     <li>
                       <strong className="text-white">Dynamic prices:</strong> each player&apos;s draft price can move up to ±{MAX_FORM_PRICE_DELTA} from their listed price within their XI tier (
                       1st XI £{PRICE_BAND[1].min}–{PRICE_BAND[1].max}, 2nd XI £{PRICE_BAND[2].min}–{PRICE_BAND[2].max}) based on season fantasy points and recent form (last 3 gameweeks).
-                      When the admin <strong className="text-white">ends a gameweek</strong>, listed prices are saved at the new level. The app does <strong className="text-white">not</strong> track what you paid when you signed a player — only the current £{BUDGET} cap when saving.
+                      When the admin <strong className="text-white">ends a gameweek</strong>, listed prices are saved at the new level. The cap rises or falls with the market. The app does <strong className="text-white">not</strong> track purchase price — only the current cap when saving.
                     </li>
                   </ul>
                 </Card>
@@ -259,7 +262,7 @@ export default function RulesPage() {
                   <p className="text-sm text-zinc-400 mb-3">
                     Each saved squad must have exactly <strong className="text-white">{SQUAD_ROLES.bat} {ROLE_LABEL.bat}s</strong>,{" "}
                     <strong className="text-white">{SQUAD_ROLES.ar} {ROLE_LABEL.ar}s</strong>, <strong className="text-white">{SQUAD_ROLES.bowl} {ROLE_LABEL.bowl}s</strong>, and{" "}
-                    <strong className="text-white">{SQUAD_ROLES.wk} {ROLE_LABEL.wk}</strong> ({SQUAD_SIZE} players total, £{BUDGET} cap). The draft pool shows each player&apos;s role; you cannot add another player
+                    <strong className="text-white">{SQUAD_ROLES.wk} {ROLE_LABEL.wk}</strong> ({SQUAD_SIZE} players total, dynamic cap in Draft). The draft pool shows each player&apos;s role; you cannot add another player
                     once that role slot is full. Only a <strong className="text-white">WK-listed</strong> player can receive the WK button — your designated keeper must be that player.
                   </p>
                   <p className="text-sm text-zinc-400">
@@ -292,8 +295,8 @@ export default function RulesPage() {
                       <strong className="text-white">{SQUAD_ROLES.bowl}</strong> bowlers ·{" "}
                       <strong className="text-white">{SQUAD_ROLES.wk}</strong> wicketkeeper
                       <span className="text-zinc-500"> ({SQUAD_SIZE} picks, </span>
-                      <strong className="text-white">£{BUDGET}</strong>
-                      <span className="text-zinc-500"> cap). WK only on WK-listed players.</span>
+                      <strong className="text-white">dynamic cap</strong>
+                      <span className="text-zinc-500"> in Draft). WK only on WK-listed players.</span>
                     </p>
                   </div>
 
@@ -305,8 +308,8 @@ export default function RulesPage() {
                           { n: "1", title: <>Pick exactly <strong className="text-white">{SQUAD_SIZE} players</strong>.</> },
                           {
                             n: "2",
-                            title: <>Stay under the <strong className="text-white">£{BUDGET}</strong> squad cap.</>,
-                            note: "Each player has a form-adjusted price (see form dots on the Players tab); your total spend cannot exceed the cap.",
+                            title: <>Stay under the <strong className="text-white">squad cap</strong> shown in Draft.</>,
+                            note: `Cap = cheapest legal squad + £${DYNAMIC_BUDGET_HEADROOM} (between £${DYNAMIC_BUDGET_MIN}–£${DYNAMIC_BUDGET_MAX}). Prices are form-adjusted.`,
                           },
                           {
                             n: "3",
@@ -405,7 +408,7 @@ export default function RulesPage() {
                   <p className="text-sm leading-relaxed text-zinc-300">
                     Every player has a <strong className="text-white">squad tier</strong> shown in the draft pool: <strong className="text-white">1st XI</strong> (first-team squad)
                     or <strong className="text-white">2nd XI</strong> (second-team / value). The seeded roster uses higher prices for 1st XI and lower for 2nd XI so you{" "}
-                    <strong className="text-white">cannot</strong> afford {SQUAD_SIZE} cheapest 1st XI picks within £{BUDGET} — you must blend both tiers.
+                    <strong className="text-white">cannot</strong> afford {SQUAD_SIZE} cheapest 1st XI picks within the squad cap — you must blend both tiers.
                   </p>
                   <p className="mt-3 text-sm leading-relaxed text-zinc-300">
                     Default seeding in the app: roughly <strong className="text-white">18</strong> players as 1st XI and <strong className="text-white">17</strong> as 2nd XI.
@@ -425,7 +428,7 @@ export default function RulesPage() {
                       [
                         <span key="t2" className="font-semibold text-zinc-200">2nd XI</span>,
                         "£5 – £8",
-                        <span key="d2" className="text-zinc-300">{`Value picks — mix with 1st XI to finish under £${BUDGET}`}</span>,
+                        <span key="d2" className="text-zinc-300">Value picks — mix with 1st XI to finish under the cap</span>,
                       ],
                     ]}
                   />
@@ -774,7 +777,7 @@ export default function RulesPage() {
                   },
                   {
                     title: "Spread the budget",
-                    body: `Several mid-priced picks plus one or two punts often beats blowing most of the £${BUDGET} cap on a handful of 1st XI premiums with weak fillers.`,
+                    body: "Several mid-priced picks plus one or two punts often beats blowing most of the cap on a handful of 1st XI premiums with weak fillers.",
                   },
                   {
                     title: "Consistency beats one miracle week",

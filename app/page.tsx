@@ -95,8 +95,10 @@ function bestXiForGameweek(playersList: Player[], gameweek: number, useLiveStats
     const histRec = (p.history ?? []).find((h) => h.week === gameweek);
     let points = 0;
     if (histRec) {
+      if (histRec.didNotPlay) continue;
       points = Number.isFinite(Number(histRec.points)) ? Number(histRec.points) : calculatePoints(histRec);
     } else if (useLiveStats) {
+      if (p.didNotPlay) continue;
       points = calculatePoints(p);
     } else {
       continue;
@@ -132,6 +134,7 @@ async function resetAllPlayerDocumentsStats() {
       stumpings: 0,
       runOuts: 0,
       didNotBat: false,
+      didNotPlay: false,
       notOut: false,
       history: [],
     });
@@ -156,6 +159,8 @@ type WeekRecord = {
   runOuts: number;
   points: number;
   didNotBat?: boolean;
+  /** Did not play the match — no points; excluded from form dots and dynamic pricing. */
+  didNotPlay?: boolean;
   /** True when batter remained not out this gameweek. */
   notOut?: boolean;
 };
@@ -184,6 +189,8 @@ type Player = {
   history: WeekRecord[];
   /** Did not bat this GW — no batting fantasy from runs/4s/6s; show DNB in lists & form (bowling/fielding still score). */
   didNotBat?: boolean;
+  /** Did not play this GW — no fantasy points; excluded from form & dynamic pricing (set via “who played” picker). */
+  didNotPlay?: boolean;
   /** Batter remained not out in this GW. Used for batting average on player leaderboard. */
   notOut?: boolean;
   /** Listed base price in Firestore; effective draft price may differ (see dynamic pricing). */
@@ -241,6 +248,7 @@ type SnapshotPlayerRow = {
   stumpings?: number;
   runOuts?: number;
   didNotBat?: boolean;
+  didNotPlay?: boolean;
   notOut?: boolean;
 };
 
@@ -507,6 +515,7 @@ function snapshotStatDiffCount(curr: SnapshotPlayerRow[] | undefined, prev: Snap
     }
     const diff =
       Boolean(p.didNotBat) !== Boolean(q.didNotBat) ||
+      Boolean(p.didNotPlay) !== Boolean(q.didNotPlay) ||
       Number(p.runs ?? 0) !== Number(q.runs ?? 0) ||
       Number(p.fours ?? 0) !== Number(q.fours ?? 0) ||
       Number(p.sixes ?? 0) !== Number(q.sixes ?? 0) ||
@@ -537,6 +546,7 @@ function isSelectionLocked(now = new Date()) {
 function sumSeasonPointsFromHistory(history: WeekRecord[] | undefined) {
   let s = 0;
   for (const h of history ?? []) {
+    if (h.didNotPlay) continue;
     const n = Number(h?.points);
     if (Number.isFinite(n)) s += n;
   }
@@ -559,6 +569,7 @@ function seasonCricketStatsFromHistory(history: WeekRecord[] | undefined) {
   let bestBowlingWkts = 0;
   let bestBowlingMaidens = 0;
   for (const h of history ?? []) {
+    if (h.didNotPlay) continue;
     const gwRuns = Number.isFinite(Number(h?.runs)) ? Number(h.runs) : 0;
     const gwWickets = Number.isFinite(Number(h?.wickets)) ? Number(h.wickets) : 0;
     const gwMaidens = Number.isFinite(Number(h?.maidens)) ? Number(h.maidens) : 0;
@@ -609,6 +620,7 @@ function seasonFantasyBreakdownFromHistory(history: WeekRecord[] | undefined) {
   let bowling = 0;
   let fielding = 0;
   for (const h of history ?? []) {
+    if (h.didNotPlay) continue;
     const br = fantasyPointsBreakdown(h);
     batting += br.batting;
     bowling += br.bowling;
@@ -644,6 +656,7 @@ function firestorePlayerMatchesAdminSnapshot(fs: Player, committed: Player): boo
     fs.stumpings === committed.stumpings &&
     fs.runOuts === committed.runOuts &&
     Boolean(fs.didNotBat) === Boolean(committed.didNotBat) &&
+    Boolean(fs.didNotPlay) === Boolean(committed.didNotPlay) &&
     Boolean(fs.notOut) === Boolean(committed.notOut) &&
     JSON.stringify(fs.history) === JSON.stringify(committed.history)
   );
@@ -1003,8 +1016,22 @@ function FormDots({ history }: { history: WeekRecord[] }) {
         const offset = 5 - recent.length;
         const rec = i >= offset ? recent[i - offset] : null;
         if (!rec) return <span key={i} className="h-2.5 w-2.5 rounded-full bg-white/10" />;
+        const dnp = Boolean(rec.didNotPlay);
         const dnb = Boolean(rec.didNotBat);
-        const title = dnb ? `GW${rec.week}: DNB${rec.points > 0 ? ` · ${rec.points} pts` : ""}` : `GW${rec.week}: ${rec.points} pts`;
+        const title = dnp
+          ? `GW${rec.week}: Did not play`
+          : dnb
+            ? `GW${rec.week}: DNB${rec.points > 0 ? ` · ${rec.points} pts` : ""}`
+            : `GW${rec.week}: ${rec.points} pts`;
+        if (dnp) {
+          return (
+            <span
+              key={i}
+              className="h-2.5 w-2.5 rounded-full bg-zinc-600/50 ring-1 ring-zinc-500/40"
+              title={title}
+            />
+          );
+        }
         if (dnb && rec.points === 0) {
           return (
             <span
@@ -1709,6 +1736,7 @@ export default function Page() {
             runOuts: Number(data.runOuts ?? 0),
             available: Boolean(data.available ?? true),
             didNotBat: Boolean(data.didNotBat),
+            didNotPlay: Boolean(data.didNotPlay),
             notOut: Boolean(data.notOut),
             history: Array.isArray(data.history) ? data.history : [],
           } satisfies Player;
@@ -2544,12 +2572,32 @@ export default function Page() {
   }
 
   function editLocalPlayer(id: number, patch: Partial<Player>) {
-    setLocalPlayers((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+    setLocalPlayers((prev) =>
+      prev.map((p) => {
+        if (p.id !== id) return p;
+        const next = { ...p, ...patch };
+        const playedStat =
+          next.runs > 0 ||
+          next.fours > 0 ||
+          next.sixes > 0 ||
+          next.wickets > 0 ||
+          next.maidens > 0 ||
+          next.catches > 0 ||
+          next.wkCatches > 0 ||
+          next.stumpings > 0 ||
+          next.runOuts > 0;
+        if (playedStat && next.didNotPlay) {
+          return { ...next, didNotPlay: false };
+        }
+        return next;
+      }),
+    );
     setUnsavedStats(true);
   }
 
   function openPlayedPicker() {
     const seed = localPlayers
+      .filter((p) => !p.didNotPlay)
       .filter((p) =>
         p.runs > 0 ||
         p.fours > 0 ||
@@ -2569,7 +2617,7 @@ export default function Page() {
   function applyPlayedPicker() {
     if (playedPickerIds.length !== EXPECTED_PLAYERS_PER_GW) {
       setActionError(
-        `Select exactly ${EXPECTED_PLAYERS_PER_GW} players who played before applying auto DNB.`,
+        `Select exactly ${EXPECTED_PLAYERS_PER_GW} players who played before applying.`,
       );
       return;
     }
@@ -2577,7 +2625,7 @@ export default function Page() {
     setLocalPlayers((prev) =>
       prev.map((p) => {
         if (played.has(p.id)) {
-          return { ...p, didNotBat: false, notOut: false };
+          return { ...p, didNotPlay: false, didNotBat: false, notOut: false };
         }
         return {
           ...p,
@@ -2590,7 +2638,8 @@ export default function Page() {
           wkCatches: 0,
           stumpings: 0,
           runOuts: 0,
-          didNotBat: true,
+          didNotBat: false,
+          didNotPlay: true,
           notOut: false,
         };
       }),
@@ -2615,6 +2664,7 @@ export default function Page() {
         stumpings: 0,
         runOuts: 0,
         didNotBat: false,
+        didNotPlay: false,
         notOut: false,
       })),
     );
@@ -2672,6 +2722,7 @@ export default function Page() {
             stumpings: stats.stumpings,
             runOuts: stats.runOuts,
             didNotBat: false,
+            didNotPlay: false,
             notOut: false,
           };
         }),
@@ -2715,6 +2766,7 @@ export default function Page() {
             stumpings: p.stumpings,
             runOuts: p.runOuts,
             didNotBat: Boolean(p.didNotBat),
+            didNotPlay: Boolean(p.didNotPlay),
             notOut: Boolean(p.notOut),
             available: p.available,
             history: p.history ?? [],
@@ -2740,6 +2792,7 @@ export default function Page() {
               stumpings: p.stumpings,
               runOuts: p.runOuts,
               didNotBat: Boolean(p.didNotBat),
+              didNotPlay: Boolean(p.didNotPlay),
               notOut: Boolean(p.notOut),
               available: p.available,
               history: p.history ?? [],
@@ -2802,6 +2855,7 @@ export default function Page() {
               stumpings: clampNonNegativeInt(Number(raw?.stumpings ?? 0)),
               runOuts: clampNonNegativeInt(Number(raw?.runOuts ?? 0)),
               didNotBat: Boolean(raw?.didNotBat),
+              didNotPlay: Boolean(raw?.didNotPlay),
               notOut: Boolean(raw?.notOut),
               available: Boolean(raw?.available),
               history: Array.isArray(raw?.history) ? raw.history : [],
@@ -2923,6 +2977,7 @@ export default function Page() {
           runOuts: p.runOuts,
           points: calculatePoints(p),
           ...(p.didNotBat ? { didNotBat: true as const } : {}),
+          ...(p.didNotPlay ? { didNotPlay: true as const } : {}),
           ...(p.notOut ? { notOut: true as const } : {}),
         },
       ],
@@ -2936,6 +2991,7 @@ export default function Page() {
       stumpings: 0,
       runOuts: 0,
       didNotBat: false,
+      didNotPlay: false,
       notOut: false,
     }));
     const pricingAfterGw = computeDynamicPricingMap(updatedPlayersRaw);
@@ -3008,6 +3064,7 @@ export default function Page() {
             stumpings: p.stumpings,
             runOuts: p.runOuts,
             didNotBat: false,
+            didNotPlay: false,
             notOut: false,
             history: p.history,
             price: p.price,
@@ -3155,6 +3212,7 @@ export default function Page() {
             stumpings: rec.stumpings,
             runOuts: rec.runOuts,
             didNotBat: Boolean(rec.didNotBat),
+            didNotPlay: Boolean(rec.didNotPlay),
             notOut: Boolean(rec.notOut),
             history: newHist,
           });
@@ -4499,7 +4557,7 @@ export default function Page() {
                               onClick={openPlayedPicker}
                               className="inline-flex items-center gap-2 rounded-xl bg-sky-600/15 px-3 py-2 text-xs font-semibold text-sky-200 ring-1 ring-sky-500/35 transition hover:bg-sky-600/25"
                             >
-                              Who played? Auto DNB
+                              Select 22 who played
                             </button>
                             <button type="button" onClick={() => void saveStats()} disabled={!unsavedStats || savingStats}
                               className={["inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold ring-1 transition",
@@ -4564,7 +4622,14 @@ export default function Page() {
                             <tbody className="divide-y divide-white/10">
                               {adminVisiblePlayers.map((p) => (
                                 <tr key={p.id} className="text-sm text-zinc-100">
-                                  <td className="sticky left-0 z-30 bg-zinc-950 px-4 py-3 font-semibold text-white shadow-[1px_0_0_0_rgba(255,255,255,0.06)]">{p.name}</td>
+                                  <td className="sticky left-0 z-30 bg-zinc-950 px-4 py-3 font-semibold text-white shadow-[1px_0_0_0_rgba(255,255,255,0.06)]">
+                                    <span>{p.name}</span>
+                                    {p.didNotPlay ? (
+                                      <span className="ml-2 rounded-md bg-zinc-600/40 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-zinc-300 ring-1 ring-zinc-500/40">
+                                        DNP
+                                      </span>
+                                    ) : null}
+                                  </td>
                                   <td className="px-2 py-3 align-middle">
                                     <select
                                       value={p.role}
@@ -4626,7 +4691,7 @@ export default function Page() {
                                       <NumberInput
                                         variant="field"
                                         value={p.runs}
-                                        disabled={Boolean(p.didNotBat)}
+                                        disabled={Boolean(p.didNotPlay || p.didNotBat)}
                                         onChange={(v) =>
                                           editLocalPlayer(p.id, {
                                             runs: v,
@@ -4640,6 +4705,7 @@ export default function Page() {
                                           <input
                                             type="checkbox"
                                             checked={Boolean(p.didNotBat)}
+                                            disabled={Boolean(p.didNotPlay)}
                                             onChange={(e) => {
                                               const on = e.target.checked;
                                               editLocalPlayer(
@@ -4649,7 +4715,7 @@ export default function Page() {
                                                   : { didNotBat: false },
                                               );
                                             }}
-                                            className="h-3.5 w-3.5 rounded border-white/20 bg-white/10 text-sky-500 focus:ring-sky-500/50"
+                                            className="h-3.5 w-3.5 rounded border-white/20 bg-white/10 text-sky-500 focus:ring-sky-500/50 disabled:opacity-40"
                                           />
                                           DNB
                                         </label>
@@ -4657,7 +4723,7 @@ export default function Page() {
                                           <input
                                             type="checkbox"
                                             checked={Boolean(p.notOut)}
-                                            disabled={Boolean(p.didNotBat)}
+                                            disabled={Boolean(p.didNotPlay || p.didNotBat)}
                                             onChange={(e) =>
                                               editLocalPlayer(
                                                 p.id,
@@ -4677,7 +4743,7 @@ export default function Page() {
                                     <NumberInput
                                       variant="field"
                                       value={p.fours}
-                                      disabled={Boolean(p.didNotBat)}
+                                      disabled={Boolean(p.didNotPlay || p.didNotBat)}
                                       onChange={(v) => editLocalPlayer(p.id, { fours: v, ...(v > 0 ? { didNotBat: false } : {}) })}
                                       className="text-center"
                                     />
@@ -4686,7 +4752,7 @@ export default function Page() {
                                     <NumberInput
                                       variant="field"
                                       value={p.sixes}
-                                      disabled={Boolean(p.didNotBat)}
+                                      disabled={Boolean(p.didNotPlay || p.didNotBat)}
                                       onChange={(v) => editLocalPlayer(p.id, { sixes: v, ...(v > 0 ? { didNotBat: false } : {}) })}
                                       className="text-center"
                                     />
@@ -4695,6 +4761,7 @@ export default function Page() {
                                     <NumberInput
                                       variant="field"
                                       value={p.wickets}
+                                      disabled={Boolean(p.didNotPlay)}
                                       onChange={(v) => editLocalPlayer(p.id, { wickets: v })}
                                       className="text-center"
                                     />
@@ -4703,6 +4770,7 @@ export default function Page() {
                                     <NumberInput
                                       variant="field"
                                       value={p.maidens}
+                                      disabled={Boolean(p.didNotPlay)}
                                       onChange={(v) => editLocalPlayer(p.id, { maidens: v })}
                                       className="text-center"
                                     />
@@ -4711,6 +4779,7 @@ export default function Page() {
                                     <NumberInput
                                       variant="field"
                                       value={p.catches}
+                                      disabled={Boolean(p.didNotPlay)}
                                       onChange={(v) => editLocalPlayer(p.id, { catches: v })}
                                       className="text-center"
                                     />
@@ -4719,6 +4788,7 @@ export default function Page() {
                                     <NumberInput
                                       variant="field"
                                       value={p.wkCatches}
+                                      disabled={Boolean(p.didNotPlay)}
                                       onChange={(v) => editLocalPlayer(p.id, { wkCatches: v })}
                                       className="text-center"
                                     />
@@ -4727,6 +4797,7 @@ export default function Page() {
                                     <NumberInput
                                       variant="field"
                                       value={p.stumpings}
+                                      disabled={Boolean(p.didNotPlay)}
                                       onChange={(v) => editLocalPlayer(p.id, { stumpings: v })}
                                       className="text-center"
                                     />
@@ -4735,6 +4806,7 @@ export default function Page() {
                                     <NumberInput
                                       variant="field"
                                       value={p.runOuts}
+                                      disabled={Boolean(p.didNotPlay)}
                                       onChange={(v) => editLocalPlayer(p.id, { runOuts: v })}
                                       className="text-center"
                                     />
@@ -4790,7 +4862,7 @@ export default function Page() {
                   Who played in GW{currentGameweek}?
                 </div>
                 <div className="mt-1 text-xs text-zinc-400">
-                  Unticked players are set to all zero stats and auto DNB.
+                  Unticked players are marked <strong className="text-zinc-200">Did not play</strong> (no stats, no form or price impact). Use DNB on the table only for players who played but did not bat.
                 </div>
                 <div className="mt-1 text-xs font-semibold text-sky-200">
                   Selected: {playedPickerIds.length}/{EXPECTED_PLAYERS_PER_GW}

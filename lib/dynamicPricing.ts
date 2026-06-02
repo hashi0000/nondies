@@ -24,6 +24,7 @@ export type PricingHistoryWeek = {
   stumpings?: number;
   runOuts?: number;
   didNotBat?: boolean;
+  didNotPlay?: boolean;
 };
 
 export type PlayerForPricing = {
@@ -41,6 +42,7 @@ export type PlayerForPricing = {
   stumpings?: number;
   runOuts?: number;
   didNotBat?: boolean;
+  didNotPlay?: boolean;
 };
 
 export type PlayerPricing = {
@@ -56,6 +58,7 @@ function clampPrice(n: number, tier: 1 | 2): number {
 }
 
 function weekPoints(rec: PricingHistoryWeek): number {
+  if (rec.didNotPlay) return 0;
   const n = Number(rec.points);
   if (Number.isFinite(n)) return n;
   return calculatePoints({
@@ -72,13 +75,18 @@ function weekPoints(rec: PricingHistoryWeek): number {
   });
 }
 
-/** Season total + weighted recent gameweeks (higher = hotter form). */
+function playedHistoryWeeks(history: PricingHistoryWeek[] | undefined): PricingHistoryWeek[] {
+  return (history ?? []).filter((h) => !h.didNotPlay);
+}
+
+/** Season total + weighted recent gameweeks (higher = hotter form). Did-not-play weeks are ignored. */
 export function formScoreForPlayer(p: PlayerForPricing): number {
+  const played = playedHistoryWeeks(p.history);
   let season = 0;
-  for (const h of p.history ?? []) {
+  for (const h of played) {
     season += weekPoints(h);
   }
-  const recent = [...(p.history ?? [])].sort((a, b) => b.week - a.week).slice(0, RECENT_FORM_WEEKS);
+  const recent = [...played].sort((a, b) => b.week - a.week).slice(0, RECENT_FORM_WEEKS);
   const recentAvg = recent.length
     ? recent.reduce((s, h) => s + weekPoints(h), 0) / recent.length
     : 0;

@@ -60,6 +60,8 @@ export type FantasyStatLine = {
   runOuts: number;
   /** Did not bat — no batting points from runs/4s/6s/milestones; bowling & fielding still count. */
   didNotBat?: boolean;
+  /** Did not play the match — no fantasy points; excluded from form and dynamic pricing. */
+  didNotPlay?: boolean;
 };
 
 /** Fantasy points for the current stat line (one gameweek row). Bat + bowl + fld sums to `total`. */
@@ -74,6 +76,9 @@ export type FantasyPointsBreakdown = {
 };
 
 export function fantasyPointsBreakdown(p: FantasyStatLine): FantasyPointsBreakdown {
+  if (Boolean(p.didNotPlay)) {
+    return { batting: 0, bowling: 0, fieldingOutfield: 0, keeper: 0, total: 0 };
+  }
   const didNotBat = Boolean(p.didNotBat);
   const runs = didNotBat ? 0 : clampNonNegativeInt(p.runs);
   const fours = didNotBat ? 0 : clampNonNegativeInt(p.fours ?? 0);

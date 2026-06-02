@@ -13,6 +13,7 @@ export type PlayerHistoryWeek = {
   runOuts: number;
   points?: number;
   didNotBat?: boolean;
+  didNotPlay?: boolean;
   notOut?: boolean;
 };
 
@@ -34,6 +35,7 @@ export const COMPARE_METRIC_LABEL: Record<CompareMetric, string> = {
 };
 
 function hasLiveGameweekStats(p: PlayerForChart): boolean {
+  if (Boolean(p.didNotPlay)) return false;
   return (
     Boolean(p.didNotBat) ||
     (p.runs ?? 0) > 0 ||
@@ -60,6 +62,7 @@ function liveWeekFromPlayer(p: PlayerForChart, week: number): PlayerHistoryWeek 
     stumpings: p.stumpings ?? 0,
     runOuts: p.runOuts ?? 0,
     didNotBat: p.didNotBat,
+    didNotPlay: p.didNotPlay,
   };
   return { week, ...line, points: calculatePoints(line) };
 }
@@ -95,12 +98,13 @@ function metricValue(rec: PlayerHistoryWeek, metric: CompareMetric): number {
     stumpings: rec.stumpings,
     runOuts: rec.runOuts,
     didNotBat: rec.didNotBat,
+    didNotPlay: rec.didNotPlay,
   };
   switch (metric) {
     case "points":
       return Number.isFinite(Number(rec.points)) ? Number(rec.points) : calculatePoints(line);
     case "runs":
-      return rec.didNotBat ? 0 : rec.runs;
+      return rec.didNotPlay || rec.didNotBat ? 0 : rec.runs;
     case "wickets":
       return rec.wickets;
     case "batting":

@@ -97,6 +97,7 @@ import {
   draftPurchasePricesForSelection,
   priceForIdFromMap,
   isGrandfatheredPricingTeam,
+  GRANDFATHERED_SQUAD_MESSAGE,
   purchasePricesForRestoredSnapshot,
   squadSpend,
   squadSpendForTeam,
@@ -577,6 +578,17 @@ function SquadOverBudgetBanner({
   );
 }
 
+function GrandfatheredSquadNotice() {
+  return (
+    <div className="rounded-2xl border border-sky-500/35 bg-sky-500/10 px-4 py-3.5 text-sm text-sky-100 ring-1 ring-sky-500/25">
+      <div className="font-semibold text-sky-50">Your squad is fine as it is</div>
+      <p className="mt-1.5 leading-relaxed text-sky-100/90">
+        {GRANDFATHERED_SQUAD_MESSAGE} Original picks keep their opening price; the Draft pool shows live prices for anyone you add or swap in.
+      </p>
+    </div>
+  );
+}
+
 function FreeSquadRebuildBanner({
   gameweek,
   locked,
@@ -590,9 +602,9 @@ function FreeSquadRebuildBanner({
     <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3.5 text-sm text-emerald-100 ring-1 ring-emerald-500/30">
       <div className="font-semibold text-emerald-50">Free squad rebuild · GW{gameweek}</div>
       <p className="mt-1.5 leading-relaxed text-emerald-100/90">
-        Player prices and the squad cap have changed. Change your full 7 in Draft{" "}
+        {GRANDFATHERED_SQUAD_MESSAGE} Optional: change your 7 in Draft{" "}
         {locked ? "after the next unlock" : `until ${LINEUP_LOCK_SUMMARY}`} with{" "}
-        <strong className="text-white">no transfer penalties</strong>. You still need to fit the new budget cap before saving.
+        <strong className="text-white">no transfer penalties</strong>. Any player you bring in costs the current dynamic price.
       </p>
       {!locked ? (
         <button
@@ -4433,6 +4445,12 @@ export default function Page() {
           </div>
         ) : null}
 
+        {mySavedTeam && isGrandfatheredPricingTeam(mySavedTeam) && !pricingAmnestyActive ? (
+          <div className={mySavedTeamBudgetIssue ? "mt-3" : "mt-4"}>
+            <GrandfatheredSquadNotice />
+          </div>
+        ) : null}
+
         {pricingAmnestyActive ? (
           <div className={mySavedTeamBudgetIssue ? "mt-3" : "mt-4"}>
             <FreeSquadRebuildBanner
@@ -4453,7 +4471,7 @@ export default function Page() {
                   <CardHeader title="Draft pool"
                     subtitle={
                       mySavedTeam && isGrandfatheredPricingTeam(mySavedTeam)
-                        ? `Squad shape: ${SQUAD_ROLES.bat}-${SQUAD_ROLES.ar}-${SQUAD_ROLES.bowl}-${SQUAD_ROLES.wk} — original season squad: your opening purchase prices apply; new transfers in Draft use current market (£${POOL_PRICE_BAND.min}–£${POOL_PRICE_BAND.max}).`
+                        ? `${GRANDFATHERED_SQUAD_MESSAGE} Draft pool shows dynamic prices (£${POOL_PRICE_BAND.min}–£${POOL_PRICE_BAND.max}) for anyone you add or swap in.`
                         : `Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — cap ${money(squadBudget)} at current market prices (£${POOL_PRICE_BAND.min}–£${POOL_PRICE_BAND.max}). New teams must fit the full dynamic rules.`
                     }
                     right={

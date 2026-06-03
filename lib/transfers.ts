@@ -50,8 +50,8 @@ export function isFreeSquadRebuildGameweek(
 
 export function pricingAmnestyPavilionMessage(gameweek: number, lineupLockSummary: string): string {
   return (
-    `📢 GW${gameweek} — free squad rebuild (new pricing)\n\n` +
-    `Player prices and the squad cap have changed. Rebuild your 7 in Draft until ${lineupLockSummary} with ` +
-    `no transfer penalties. Fix any over-budget squad before saving.`
+    `📢 GW${gameweek} — pricing update\n\n` +
+    `You don't have to change your squad — your original picks keep their opening price. ` +
+    `If you do rebuild in Draft until ${lineupLockSummary}, new picks use dynamic prices and there are no transfer penalties.`
   );
 }

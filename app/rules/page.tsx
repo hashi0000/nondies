@@ -25,6 +25,7 @@ import {
   fantasyPointsBreakdown,
 } from "@/lib/fantasyPoints";
 import { POOL_PRICE_BAND } from "@/lib/dynamicPricing";
+import { GRANDFATHERED_SQUAD_MESSAGE } from "@/lib/squadPurchasePrices";
 
 export const metadata = {
   title: "How to Play — Nondies Fantasy League",
@@ -150,7 +151,8 @@ export default function RulesPage() {
             <strong className="text-zinc-200">2-2-2-1</strong> shape (batters, all-rounders, bowlers, wicketkeeper) within a{" "}
             <strong className="text-zinc-200">dynamic squad cap</strong> (usually £{DYNAMIC_BUDGET_MIN}–£{DYNAMIC_BUDGET_MAX} — see{" "}
             <a href="#pricing" className="font-medium text-red-400 underline decoration-red-500/50 underline-offset-2 hover:text-red-300">Dynamic pricing</a>).
-            Player prices move with <strong className="text-zinc-200">form</strong> (£{POOL_PRICE_BAND.min}–£{POOL_PRICE_BAND.max}).
+            Player prices move with <strong className="text-zinc-200">form</strong> (£{POOL_PRICE_BAND.min}–£{POOL_PRICE_BAND.max}) for new picks.
+            Original season squads do not need to change — {GRANDFATHERED_SQUAD_MESSAGE.toLowerCase()}
             Tags <strong className="text-zinc-200">1st XI</strong> / <strong className="text-zinc-200">2nd XI</strong> are filters only — a hot 2nd XI pick can cost as much as anyone.
             Assign captain, vice-captain and wicketkeeper, save to Firebase, and earn points from stats the admin records each gameweek.{" "}
             <strong className="text-zinc-300">Transfers:</strong>{" "}
@@ -442,6 +444,10 @@ export default function RulesPage() {
                     <strong className="text-white">new transfers</strong>. The admin&apos;s{" "}
                     <strong className="text-white">listed price</strong> (stored in Firebase) updates when a gameweek{" "}
                     <strong className="text-white">ends</strong>.
+                  </p>
+                  <p className="mt-3 text-sm leading-relaxed text-zinc-300">
+                    <strong className="text-white">{GRANDFATHERED_SQUAD_MESSAGE}</strong> Original season picks (through GW{PRE_DYNAMIC_PRICING_SNAPSHOT_GW}) keep their{" "}
+                    <strong className="text-white">opening purchase price</strong>. The Draft pool always shows live dynamic prices for anyone you add or swap in.
                   </p>
                   <p className="mt-3 text-sm leading-relaxed text-zinc-300">
                     Your <strong className="text-white">budget spend</strong> depends on when you joined:

@@ -56,6 +56,10 @@ export function isGrandfatheredPricingTeam(team: { firstSaveGameweek?: number })
   return Math.floor(fsg) <= PRE_DYNAMIC_PRICING_SNAPSHOT_GW;
 }
 
+/** User-facing summary for original season squads vs dynamic pricing on changes. */
+export const GRANDFATHERED_SQUAD_MESSAGE =
+  "You don't have to change your squad. If you do, new picks and transfers use dynamic prices.";
+
 export function parsePurchasePriceMap(raw: unknown): PurchasePriceMap {
   if (!raw || typeof raw !== "object") return {};
   const out: PurchasePriceMap = {};

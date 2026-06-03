@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Check,
@@ -55,6 +55,7 @@ import {
   LINEUP_LOCK_WEEKDAY,
   MAX_BANKED_FREE_TRANSFERS,
   POINTS_PER_EXTRA_TRANSFER,
+  PRE_DYNAMIC_PRICING_SNAPSHOT_GW,
   type PlayerRole,
   ROLE_LABEL,
   SQUAD_ROLES,
@@ -73,9 +74,11 @@ import { normalizePlayCricketName } from "@/lib/playCricket/names";
 import {
   cumulativeRanksByUid,
   deleteAllGwTeamsDocs,
+  firestoreTeamFieldsFromGwSnapshot,
   gwSnapshotToSavedTeam,
   parseGwTeamsDoc,
   rankMovement,
+  squadMatchesGwSnapshot,
   type GwTeamSnapshot,
   type GwTeamsDoc,
 } from "@/lib/gwTeams";
@@ -86,9 +89,17 @@ import {
   POOL_PRICE_BAND,
   repairAllPlayersDidNotPlayHistory,
   repairHistoryDidNotPlayWeeks,
-  squadBudgetStatus,
   withEffectivePrices,
 } from "@/lib/dynamicPricing";
+import {
+  buildPurchasePricesAfterSave,
+  draftPurchasePricesForSelection,
+  priceForIdFromMap,
+  purchasePricesForRestoredSnapshot,
+  squadSpend,
+  squadSpendForTeam,
+  type PurchasePriceMap,
+} from "@/lib/squadPurchasePrices";
 
 /** Dream team size — top individual scorers for the gameweek. */
 const BEST_XI_SIZE = 11;
@@ -363,6 +374,8 @@ type SavedTeam = {
    * Omitted IDs are treated as GW1 — only matters for picks after GW1 saves.
    */
   playerJoinedGameweek?: Record<string, number>;
+  /** £ paid when each player joined this squad — kept on transfer out/in at current market. */
+  playerPurchasePrices?: PurchasePriceMap;
   /** Gameweek when this team was first saved (mid-season joiners get unlimited edits until that GW’s lineup lock). */
   firstSaveGameweek?: number;
   createdBy?: string;
@@ -542,7 +555,8 @@ function SquadOverBudgetBanner({
     <div className="rounded-2xl border border-amber-500/45 bg-amber-500/15 px-4 py-3.5 text-sm text-amber-100 ring-1 ring-amber-500/35">
       <div className="font-semibold text-amber-50">Your saved squad is over budget</div>
       <p className="mt-1.5 leading-relaxed text-amber-100/90">
-        Dynamic pricing is live. Your Firestore squad costs <strong className="text-white">{money(spend)}</strong> (cap{" "}
+        Dynamic pricing is live. Your squad costs <strong className="text-white">{money(spend)}</strong> at your{" "}
+        <strong className="text-white">purchase prices</strong> (cap{" "}
         <strong className="text-white">{money(budget)}</strong>, <strong className="text-white">{money(overBy)}</strong> over).
         {locked
           ? ` You can edit again after ${LINEUP_LOCK_SUMMARY} — then remove or swap players and save.`
@@ -1181,11 +1195,12 @@ function validateTeam(args: {
   teamName: string; selected: number[]; captain: number | null;
   viceCaptain: number | null; keeper: number | null; byId: Map<number, Player>;
   budget: number;
+  priceForPlayerId: (id: number) => number;
 }) {
-  const { teamName, selected, captain, viceCaptain, keeper, byId, budget } = args;
+  const { teamName, selected, captain, viceCaptain, keeper, byId, budget, priceForPlayerId } = args;
   const set = new Set(selected);
   const sel = selected.map((id) => byId.get(id)).filter(Boolean) as Player[];
-  const spend = sel.reduce((s, p) => s + p.price, 0);
+  const spend = selected.reduce((s, id) => s + priceForPlayerId(id), 0);
   const compositionOk = squadCompositionOk(selected, byId);
   const keeperPlayer = keeper !== null ? byId.get(keeper) : undefined;
   const keeperIsWkRole = keeperPlayer?.role === "wk";
@@ -1212,7 +1227,7 @@ function validateTeam(args: {
   }
   if (!checks.withinBudget) {
     problems.push(
-      `Stay within budget (${money(budget)}). Squad costs ${money(spend)} at current form-adjusted prices — swap or remove players.`,
+      `Stay within budget (${money(budget)}). Squad costs ${money(spend)} at your purchase prices — swap or remove players.`,
     );
   }
   if (!checks.captain) problems.push("Select a captain (C).");
@@ -1271,7 +1286,11 @@ function evaluateSavedTeamHealth(
       severity = Math.max(severity, 75);
     }
 
-    const budgetStatus = squadBudgetStatus(team.players, budget, (id) => byId.get(id)?.price);
+    const listedPriceForId = (id: number) => byId.get(id)?.basePrice ?? byId.get(id)?.price;
+    const marketPriceForId = (id: number) => byId.get(id)?.price ?? 0;
+    const spend = squadSpendForTeam(team, listedPriceForId, marketPriceForId);
+    const overBy = Math.max(0, spend - budget);
+    const budgetStatus = { spend, overBudget: overBy > 0, overBy };
     if (budgetStatus.overBudget) {
       labels.push(`Over budget ${money(budgetStatus.overBy)}`);
       severity = Math.max(severity, 85);
@@ -2122,6 +2141,7 @@ export default function Page() {
   const [dnpHistoryRepairDone, setDnpHistoryRepairDone] = useState(false);
   const [freeSquadRebuildGameweek, setFreeSquadRebuildGameweek] = useState<number | null>(null);
   const [pricingAmnestyBusy, setPricingAmnestyBusy] = useState(false);
+  const [revertPostPricingBusy, setRevertPostPricingBusy] = useState(false);
   const [dnpRepairNote, setDnpRepairNote] = useState<string | null>(null);
   const pendingDnpHistoryRepairRef = useRef(false);
   const [fsReady, setFsReady] = useState(false);
@@ -2585,6 +2605,14 @@ export default function Page() {
     () => new Map(draftPoolPlayers.map((p) => [p.id, p])),
     [draftPoolPlayers],
   );
+  const marketPriceForId = useCallback(
+    (id: number) => playersById.get(id)?.price ?? 0,
+    [playersById],
+  );
+  const listedPriceForId = useCallback(
+    (id: number) => playersById.get(id)?.basePrice ?? playersById.get(id)?.price,
+    [playersById],
+  );
   /** Same source as End GW — includes unsaved admin table so catches update the leaderboard after Save stats (and for admin preview before save). */
   const scoringPlayers = useMemo(
     () => (unsavedStats ? localPlayers : players),
@@ -2613,11 +2641,6 @@ export default function Page() {
     void lockClock;
     return Date.now();
   }, [lockClock]);
-
-  const spend = useMemo(
-    () => builder.selected.reduce((s, id) => s + (playersById.get(id)?.price ?? 0), 0),
-    [builder.selected, playersById]
-  );
 
   const draftRoleCounts = useMemo(
     () => countRolesInSelection(builder.selected, playersById),
@@ -2866,23 +2889,49 @@ export default function Page() {
     return { player: p, week, record, isLive: week === currentGameweek };
   }, [historyWeekEdit, localPlayers, currentGameweek]);
 
-  const validation = useMemo(() => validateTeam({
-    teamName: builder.teamName, selected: builder.selected,
-    captain: builder.captain, viceCaptain: builder.viceCaptain,
-    keeper: builder.keeper, byId: playersById, budget: squadBudget,
-  }), [builder, playersById, squadBudget]);
-
   const mySavedTeam = useMemo(
     () => (authUser ? teams.find((t) => t.uid === authUser.uid) : undefined),
     [teams, authUser],
   );
 
+  const draftPurchasePrices = useMemo(
+    () =>
+      draftPurchasePricesForSelection(
+        builder.selected,
+        mySavedTeam,
+        marketPriceForId,
+        listedPriceForId,
+      ),
+    [builder.selected, mySavedTeam, marketPriceForId, listedPriceForId],
+  );
+
+  const spend = useMemo(
+    () => squadSpend(builder.selected, draftPurchasePrices, marketPriceForId),
+    [builder.selected, draftPurchasePrices, marketPriceForId],
+  );
+
+  const validation = useMemo(
+    () =>
+      validateTeam({
+        teamName: builder.teamName,
+        selected: builder.selected,
+        captain: builder.captain,
+        viceCaptain: builder.viceCaptain,
+        keeper: builder.keeper,
+        byId: playersById,
+        budget: squadBudget,
+        priceForPlayerId: (id) => priceForIdFromMap(id, draftPurchasePrices, marketPriceForId),
+      }),
+    [builder, playersById, squadBudget, draftPurchasePrices, marketPriceForId],
+  );
+
   const mySavedTeamBudgetIssue = useMemo(() => {
     if (!mySavedTeam || mySavedTeam.players.length !== SQUAD_SIZE) return null;
-    const status = squadBudgetStatus(mySavedTeam.players, squadBudget, (id) => playersById.get(id)?.price);
-    if (!status.overBudget) return null;
-    return status;
-  }, [mySavedTeam, playersById, squadBudget]);
+    const teamSpend = squadSpendForTeam(mySavedTeam, listedPriceForId, marketPriceForId);
+    const overBy = Math.max(0, teamSpend - squadBudget);
+    if (overBy <= 0) return null;
+    return { spend: teamSpend, overBudget: true, overBy };
+  }, [mySavedTeam, listedPriceForId, marketPriceForId, squadBudget]);
 
   const mySavedTeamHydrateWire = useMemo(
     () => (mySavedTeam ? savedTeamHydrateWireKey(mySavedTeam) : ""),
@@ -3020,6 +3069,21 @@ export default function Page() {
     [leaderboard],
   );
 
+  const postPricingRevertPreview = useMemo(() => {
+    const gwDoc = gwTeamsArchive.find((g) => g.gameweek === PRE_DYNAMIC_PRICING_SNAPSHOT_GW);
+    if (!gwDoc) return { missingSnapshot: true as const, teams: [] as { name: string; uid: string }[] };
+    const rows: { name: string; uid: string }[] = [];
+    for (const t of teams) {
+      const snap = gwDoc.teams.find((x) => x.uid === t.uid);
+      if (!snap?.players?.length) continue;
+      if (!squadMatchesGwSnapshot(t, snap)) {
+        rows.push({ name: t.name, uid: t.uid });
+      }
+    }
+    rows.sort((a, b) => a.name.localeCompare(b.name));
+    return { missingSnapshot: false as const, teams: rows };
+  }, [teams, gwTeamsArchive]);
+
   const completedGameweeks = useMemo(
     () => gwTeamsArchive.map((g) => g.gameweek).sort((a, b) => b - a),
     [gwTeamsArchive],
@@ -3119,10 +3183,17 @@ export default function Page() {
           viceCaptain: prev.viceCaptain === id ? null : prev.viceCaptain,
           keeper: prev.keeper === id ? null : prev.keeper };
       }
-      const subSpend = prev.selected.reduce((s, pid) => s + (playersById.get(pid)?.price ?? 0), 0);
-      if (!p.available || prev.selected.length >= SQUAD_SIZE || subSpend + p.price > squadBudget) return prev;
+      const nextSelected = [...prev.selected, id];
+      const nextPrices = draftPurchasePricesForSelection(
+        nextSelected,
+        mySavedTeam,
+        (pid) => playersById.get(pid)?.price ?? 0,
+        (pid) => playersById.get(pid)?.basePrice ?? playersById.get(pid)?.price,
+      );
+      const nextSpend = squadSpend(nextSelected, nextPrices, (pid) => playersById.get(pid)?.price ?? 0);
+      if (!p.available || prev.selected.length >= SQUAD_SIZE || nextSpend > squadBudget) return prev;
       if (!canAddPlayerForRoles(id, prev.selected, playersById)) return prev;
-      return { ...prev, selected: [...prev.selected, id] };
+      return { ...prev, selected: nextSelected };
     });
   }
 
@@ -3161,6 +3232,12 @@ export default function Page() {
         const prevCumulative = existing?.cumulativePoints ?? 0;
         const nowSave = new Date();
         const playerJoinedGameweek = buildPlayerJoinedGameweekAfterSave(existing, newPlayers, currentGameweek, nowSave);
+        const playerPurchasePrices = buildPurchasePricesAfterSave({
+          existing,
+          newPlayers,
+          marketPriceForId,
+          listedPriceForId,
+        });
 
         const penaltiesApply = transferPenaltiesApplyForTeam(
           currentGameweek,
@@ -3215,6 +3292,7 @@ export default function Page() {
             freeTransfersAtGwStart: freeAtGwStart,
             transferPenaltyPointsApplied: penaltyDue,
             playerJoinedGameweek,
+            playerPurchasePrices,
             ...(!existing ? { firstSaveGameweek: currentGameweek } : {}),
           },
           { merge: true },
@@ -3828,6 +3906,16 @@ export default function Page() {
           const nextFree = freeTransfersAfterRollover(unused);
           const cumulativeBefore = team.cumulativePoints ?? 0;
           const cumulativeAfter = Math.round((cumulativeBefore + weekPts) * 10) / 10;
+          const playerPurchasePrices =
+            team.playerPurchasePrices && Object.keys(team.playerPurchasePrices).length > 0
+              ? team.playerPurchasePrices
+              : buildPurchasePricesAfterSave({
+                  existing: team,
+                  newPlayers: team.players,
+                  marketPriceForId: (id) =>
+                    pricingAfterGw.get(id)?.effectivePrice ?? playersByIdForGw.get(id)?.price ?? 0,
+                  listedPriceForId: (id) => playersByIdForGw.get(id)?.price,
+                });
           teamSnapshots.push({
             uid: team.uid,
             name: team.name,
@@ -3856,6 +3944,7 @@ export default function Page() {
             freeTransfersAtGwStart: nextFree,
             transferPenaltyPointsApplied: 0,
             playerJoinedGameweek: team.playerJoinedGameweek ?? {},
+            playerPurchasePrices,
           });
         }
 
@@ -3947,18 +4036,13 @@ export default function Page() {
         const batch = writeBatch(db);
         for (const ts of gwDoc.teams) {
           if (!ts.players?.length) continue;
-          batch.update(doc(db, "teams", ts.uid), {
-            name: ts.name,
-            ownerName: ts.ownerName ?? null,
-            players: [...ts.players],
-            captain: ts.captain,
-            viceCaptain: ts.viceCaptain,
-            keeper: ts.keeper,
-            transferBaselinePlayers: [...ts.transferBaselinePlayers],
-            freeTransfersAtGwStart: ts.freeTransfersAtGwStart,
-            transferPenaltyPointsApplied: ts.transferPenaltyPointsApplied ?? 0,
-            playerJoinedGameweek: ts.playerJoinedGameweek ?? {},
-          });
+          const playerPurchasePrices = purchasePricesForRestoredSnapshot(
+            ts.players,
+            ts.playerJoinedGameweek,
+            marketPriceForId,
+            listedPriceForId,
+          );
+          batch.update(doc(db, "teams", ts.uid), firestoreTeamFieldsFromGwSnapshot(ts, playerPurchasePrices));
         }
         await batch.commit();
       });
@@ -3971,6 +4055,66 @@ export default function Page() {
       }
     } catch {
       /* runAction sets actionError */
+    }
+  }
+
+  async function revertSquadsChangedAfterPricing() {
+    const gw = PRE_DYNAMIC_PRICING_SNAPSHOT_GW;
+    const preview = postPricingRevertPreview;
+    if (preview.missingSnapshot) {
+      setActionError(`No GW${gw} snapshot in gwTeams — cannot revert post-pricing squad changes.`);
+      return;
+    }
+    if (preview.teams.length === 0) {
+      setActionError(`Every squad already matches the GW${gw} snapshot. Nothing to revert.`);
+      return;
+    }
+    const names = preview.teams.map((t) => t.name).join(", ");
+    if (
+      !window.confirm(
+        `Revert ${preview.teams.length} team(s) to their GW${gw} squads (players, C/VC/WK, transfer state, opening purchase prices)?\n\n` +
+          `${names}\n\n` +
+          `League points are not changed. Managers who did not change after dynamic pricing are untouched.`,
+      )
+    ) {
+      return;
+    }
+    setRevertPostPricingBusy(true);
+    try {
+      await runAction(`Revert post-pricing squads to GW${gw}`, async () => {
+        const gwRef = doc(db, "gwTeams", String(gw));
+        const gwSnap = await getDoc(gwRef);
+        if (!gwSnap.exists()) throw new Error(`gwTeams/${gw} not found.`);
+        const gwDoc = parseGwTeamsDoc(gwSnap.data() as Record<string, unknown>);
+        if (!gwDoc?.teams.length) throw new Error(`GW${gw} snapshot has no teams.`);
+
+        const revertUids = new Set(preview.teams.map((t) => t.uid));
+        const batch = writeBatch(db);
+        for (const ts of gwDoc.teams) {
+          if (!revertUids.has(ts.uid) || !ts.players?.length) continue;
+          const playerPurchasePrices = purchasePricesForRestoredSnapshot(
+            ts.players,
+            ts.playerJoinedGameweek,
+            marketPriceForId,
+            listedPriceForId,
+          );
+          batch.update(doc(db, "teams", ts.uid), firestoreTeamFieldsFromGwSnapshot(ts, playerPurchasePrices));
+        }
+        await batch.commit();
+      });
+      clearedSavedTeamWireKeyRef.current = null;
+      if (authUser) {
+        const snap = gwTeamsArchive
+          .find((g) => g.gameweek === gw)
+          ?.teams.find((t) => t.uid === authUser.uid);
+        if (snap && preview.teams.some((t) => t.uid === authUser.uid)) {
+          setBuilder(builderStateFromSavedTeam(gwSnapshotToSavedTeam(snap) as SavedTeam, playersById));
+        }
+      }
+    } catch {
+      /* runAction sets actionError */
+    } finally {
+      setRevertPostPricingBusy(false);
     }
   }
 
@@ -4274,7 +4418,7 @@ export default function Page() {
               <section className="order-2 lg:order-1 lg:col-span-7">
                 <Card>
                   <CardHeader title="Draft pool"
-                    subtitle={`Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — cap ${money(squadBudget)} (cheapest legal 2-2-2-1 ${dynamicBudget.floorCost != null ? money(dynamicBudget.floorCost) : "—"} + ${money(dynamicBudget.headroom)}). Draft prices £${POOL_PRICE_BAND.min}–£${POOL_PRICE_BAND.max} from pool-wide form rank (listed price updates when a gameweek ends).`}
+                    subtitle={`Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — cap ${money(squadBudget)} (cheapest legal 2-2-2-1 ${dynamicBudget.floorCost != null ? money(dynamicBudget.floorCost) : "—"} + ${money(dynamicBudget.headroom)}). Pool prices £${POOL_PRICE_BAND.min}–£${POOL_PRICE_BAND.max} for new transfers; original picks keep their opening price.`}
                     right={
                       <div className="flex max-w-[16rem] flex-col items-end gap-2 sm:max-w-none">
                         <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
@@ -4400,7 +4544,18 @@ export default function Page() {
                         </div>
                       ) : filteredPlayers.map((p) => {
                         const selected = builder.selected.includes(p.id);
-                        const wouldBust = !selected && spend + p.price > squadBudget;
+                        const wouldBust =
+                          !selected &&
+                          squadSpend(
+                            [...builder.selected, p.id],
+                            draftPurchasePricesForSelection(
+                              [...builder.selected, p.id],
+                              mySavedTeam,
+                              marketPriceForId,
+                              listedPriceForId,
+                            ),
+                            marketPriceForId,
+                          ) > squadBudget;
                         const full = !selected && selectedCount >= SQUAD_SIZE;
                         const roleFull = !selected && !canAddPlayerForRoles(p.id, builder.selected, playersById);
                         const disabled = locked || !p.available || wouldBust || full || roleFull;
@@ -5128,6 +5283,53 @@ export default function Page() {
                             : pricingAmnestyActive
                               ? "Post Pavilion notice again"
                               : `Enable free rebuild GW${currentGameweek} + notify`}
+                        </button>
+                      </div>
+
+                      <div className="rounded-2xl border border-amber-500/35 bg-amber-500/10 px-4 py-3.5 text-sm text-amber-100 ring-1 ring-amber-500/25">
+                        <div className="font-semibold text-amber-50">
+                          Revert post-pricing squad changes → GW{PRE_DYNAMIC_PRICING_SNAPSHOT_GW}
+                        </div>
+                        <p className="mt-1.5 leading-relaxed text-amber-100/90">
+                          Managers who changed their XI after dynamic pricing went live are restored to their locked GW
+                          {PRE_DYNAMIC_PRICING_SNAPSHOT_GW} squad with opening purchase prices. Points and gameweek are unchanged;
+                          squads that already match GW{PRE_DYNAMIC_PRICING_SNAPSHOT_GW} are left alone.
+                        </p>
+                        {postPricingRevertPreview.missingSnapshot ? (
+                          <p className="mt-2 text-xs font-medium text-amber-200/90">
+                            No GW{PRE_DYNAMIC_PRICING_SNAPSHOT_GW} snapshot loaded — run End GW first or check gwTeams in Firebase.
+                          </p>
+                        ) : postPricingRevertPreview.teams.length === 0 ? (
+                          <p className="mt-2 text-xs font-medium text-emerald-200/90">
+                            All squads match GW{PRE_DYNAMIC_PRICING_SNAPSHOT_GW} — nothing to revert.
+                          </p>
+                        ) : (
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {postPricingRevertPreview.teams.map((t) => (
+                              <span
+                                key={t.uid}
+                                className="rounded-full bg-amber-950/50 px-2.5 py-1 text-xs font-medium text-amber-100 ring-1 ring-amber-500/25"
+                              >
+                                {t.name}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => void revertSquadsChangedAfterPricing()}
+                          disabled={
+                            revertPostPricingBusy ||
+                            postPricingRevertPreview.missingSnapshot ||
+                            postPricingRevertPreview.teams.length === 0
+                          }
+                          className="mt-3 rounded-xl bg-amber-600 px-3 py-2 text-xs font-bold text-white ring-1 ring-amber-500/50 hover:bg-amber-500 disabled:opacity-50"
+                        >
+                          {revertPostPricingBusy
+                            ? "Reverting…"
+                            : postPricingRevertPreview.teams.length === 0
+                              ? "Nothing to revert"
+                              : `Revert ${postPricingRevertPreview.teams.length} team(s) to GW${PRE_DYNAMIC_PRICING_SNAPSHOT_GW}`}
                         </button>
                       </div>
 

@@ -102,6 +102,42 @@ export function rankMovement(
   return { overallRank, previousRank, delta: previousRank - overallRank };
 }
 
+type SquadShape = {
+  players: number[];
+  captain: number | null;
+  viceCaptain: number | null;
+  keeper: number | null;
+};
+
+function squadShapeKey(s: SquadShape): string {
+  const ids = [...s.players].sort((a, b) => a - b);
+  return `${ids.join(",")}|${s.captain ?? ""}|${s.viceCaptain ?? ""}|${s.keeper ?? ""}`;
+}
+
+/** True when live squad matches a locked gameweek snapshot (players + C/VC/WK). */
+export function squadMatchesGwSnapshot(live: SquadShape, snap: SquadShape): boolean {
+  return squadShapeKey(live) === squadShapeKey(snap);
+}
+
+export function firestoreTeamFieldsFromGwSnapshot(
+  ts: GwTeamSnapshot,
+  playerPurchasePrices?: Record<string, number>,
+): Record<string, unknown> {
+  return {
+    name: ts.name,
+    ownerName: ts.ownerName ?? null,
+    players: [...ts.players],
+    captain: ts.captain,
+    viceCaptain: ts.viceCaptain,
+    keeper: ts.keeper,
+    transferBaselinePlayers: [...ts.transferBaselinePlayers],
+    freeTransfersAtGwStart: ts.freeTransfersAtGwStart,
+    transferPenaltyPointsApplied: ts.transferPenaltyPointsApplied ?? 0,
+    playerJoinedGameweek: ts.playerJoinedGameweek ?? {},
+    ...(playerPurchasePrices ? { playerPurchasePrices } : {}),
+  };
+}
+
 export function parseGwTeamsDoc(raw: Record<string, unknown>): GwTeamsDoc | null {
   const gameweek = Number(raw.gameweek);
   if (!Number.isFinite(gameweek) || gameweek < 1) return null;

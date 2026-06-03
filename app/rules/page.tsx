@@ -427,10 +427,14 @@ export default function RulesPage() {
                     <strong className="text-white">whole pool</strong> — not separate 1st XI / 2nd XI caps — so in-form value picks can rise to premium levels.
                   </p>
                   <p className="mt-3 text-sm leading-relaxed text-zinc-300">
-                    The number you see in <strong className="text-white">Draft</strong> is the live form price. The admin&apos;s{" "}
+                    The number you see in <strong className="text-white">Draft</strong> is the live market price for{" "}
+                    <strong className="text-white">new transfers</strong>. The admin&apos;s{" "}
                     <strong className="text-white">listed price</strong> (stored in Firebase) updates when a gameweek{" "}
-                    <strong className="text-white">ends</strong>. The app does <strong className="text-white">not</strong> track what you originally paid — only whether your squad fits the{" "}
-                    <strong className="text-white">current cap</strong> when you save.
+                    <strong className="text-white">ends</strong>.
+                  </p>
+                  <p className="mt-3 text-sm leading-relaxed text-zinc-300">
+                    Your <strong className="text-white">budget spend</strong> uses what you actually paid:{" "}
+                    <strong className="text-white">original season picks keep their opening listed price</strong>; anyone you transfer in later costs their current market price at the time of the transfer.
                   </p>
                 </Card>
 
@@ -485,6 +489,7 @@ export default function RulesPage() {
                     </li>
                     <li>
                       After a major pricing change, the committee may run a <strong className="text-white">free squad rebuild week</strong> (no transfer penalties — see Transfers).
+                      Squads changed after dynamic pricing may be rolled back to the locked GW4 snapshot by the admin.
                     </li>
                   </ul>
                 </Card>
@@ -494,6 +499,14 @@ export default function RulesPage() {
                   <Table
                     headers={["Situation", "What happens"]}
                     rows={[
+                      [
+                        "Player you picked at season start",
+                        <span key="d" className="text-zinc-300">Counts at your <strong className="text-white">opening price</strong> even if their market price rises</span>,
+                      ],
+                      [
+                        "New transfer this week",
+                        <span key="e" className="text-zinc-300">Costs the current market price when you save — sell and re-buy later and you pay the new price</span>,
+                      ],
                       [
                         "Top scorer in the pool",
                         <span key="a" className="text-zinc-300">Draft price moves toward <strong className="text-white">£{POOL_PRICE_BAND.max}</strong>, even if tagged 2nd XI</span>,

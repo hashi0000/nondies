@@ -80,7 +80,7 @@ import {
   computeDynamicBudget,
   computeDynamicPricingMap,
   countDidNotPlayHistoryRepairs,
-  MAX_FORM_PRICE_DELTA,
+  POOL_PRICE_BAND,
   repairAllPlayersDidNotPlayHistory,
   repairHistoryDidNotPlayWeeks,
   squadBudgetStatus,
@@ -3975,7 +3975,7 @@ export default function Page() {
               <section className="order-2 lg:order-1 lg:col-span-7">
                 <Card>
                   <CardHeader title="Draft pool"
-                    subtitle={`Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — cap ${money(squadBudget)} (cheapest legal squad ${dynamicBudget.floorCost != null ? money(dynamicBudget.floorCost) : "—"} + ${money(dynamicBudget.headroom)}). Prices shift ±${MAX_FORM_PRICE_DELTA} with form. Listed prices update when a gameweek ends.`}
+                    subtitle={`Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — cap ${money(squadBudget)} (cheapest legal 2-2-2-1 ${dynamicBudget.floorCost != null ? money(dynamicBudget.floorCost) : "—"} + ${money(dynamicBudget.headroom)}). Draft prices £${POOL_PRICE_BAND.min}–£${POOL_PRICE_BAND.max} from pool-wide form rank (listed price updates when a gameweek ends).`}
                     right={
                       <div className="flex max-w-[16rem] flex-col items-end gap-2 sm:max-w-none">
                         <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
@@ -5369,7 +5369,14 @@ export default function Page() {
                                       if (p.didNotPlay) {
                                         return (
                                           <div className="mt-1 text-center text-[10px] text-zinc-500">
-                                            Draft {money(pr.effectivePrice)} · base (DNP)
+                                            Draft {money(pr.effectivePrice)} · base (DNP this GW)
+                                          </div>
+                                        );
+                                      }
+                                      if (pr.valueRank != null && pr.pricedPoolSize != null) {
+                                        return (
+                                          <div className="mt-1 text-center text-[10px] text-zinc-500">
+                                            #{pr.valueRank}/{pr.pricedPoolSize} form · listed {money(pr.basePrice)}
                                           </div>
                                         );
                                       }

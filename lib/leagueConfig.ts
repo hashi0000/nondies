@@ -9,10 +9,10 @@ export const SQUAD_SIZE = 7;
 export const BUDGET = 64;
 export const BUDGET_BASE = BUDGET;
 
-/** £ above the cheapest legal 7 — room for several premiums vs an all-value squad. */
-export const DYNAMIC_BUDGET_HEADROOM = 24;
-export const DYNAMIC_BUDGET_MIN = 64;
-export const DYNAMIC_BUDGET_MAX = 80;
+/** £ above the cheapest legal 2-2-2-1 — room for a couple of premiums vs an all-value squad. */
+export const DYNAMIC_BUDGET_HEADROOM = 20;
+export const DYNAMIC_BUDGET_MIN = 60;
+export const DYNAMIC_BUDGET_MAX = 85;
 
 /** Lineup lock in the user’s browser local time (`Date.getDay()` scale: 0 Sun … 6 Sat). */
 export const LINEUP_LOCK_WEEKDAY = 6;

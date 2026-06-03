@@ -22,7 +22,7 @@ import {
   WICKET_HAUL_BONUS,
   fantasyPointsBreakdown,
 } from "@/lib/fantasyPoints";
-import { MAX_FORM_PRICE_DELTA, PRICE_BAND } from "@/lib/dynamicPricing";
+import { POOL_PRICE_BAND } from "@/lib/dynamicPricing";
 
 export const metadata = {
   title: "How to Play — Nondies Fantasy League",
@@ -251,9 +251,12 @@ export default function RulesPage() {
                       <strong className="text-white">not</strong> implemented.
                     </li>
                     <li>
-                      <strong className="text-white">Dynamic prices:</strong> each player&apos;s draft price can move up to ±{MAX_FORM_PRICE_DELTA} from their listed price within their XI tier (
-                      1st XI £{PRICE_BAND[1].min}–{PRICE_BAND[1].max}, 2nd XI £{PRICE_BAND[2].min}–{PRICE_BAND[2].max}) based on season fantasy points and recent form (last 3 gameweeks).
-                      When the admin <strong className="text-white">ends a gameweek</strong>, listed prices are saved at the new level. The cap rises or falls with the market. The app does <strong className="text-white">not</strong> track purchase price — only the current cap when saving.
+                      <strong className="text-white">Dynamic prices:</strong> once a player has gameweek history, their draft price is set from{" "}
+                      <strong className="text-white">performance rank in the whole pool</strong> (60% season pts-per-game + 40% last 3 played weeks; DNP weeks ignored).
+                      Draft prices run from <strong className="text-white">£{POOL_PRICE_BAND.min}–£{POOL_PRICE_BAND.max}</strong> — top form ≈ £{POOL_PRICE_BAND.max}, coldest ≈ £{POOL_PRICE_BAND.min}.
+                      <strong className="text-white"> 1st XI / 2nd XI</strong> tags are for squad filters only; a hot 2nd XI player can cost as much as anyone.
+                      When the admin <strong className="text-white">ends a gameweek</strong>, listed prices are saved at the new draft level. The squad cap rises or falls with the market. The app does{" "}
+                      <strong className="text-white">not</strong> track purchase price — only the current cap when saving.
                     </li>
                   </ul>
                 </Card>

@@ -8,16 +8,21 @@ import {
   type PlayerRole,
 } from "@/lib/leagueConfig";
 
-/** Price bands per squad tier (1st / 2nd XI). */
+/** Draft price range for the whole pool (1st / 2nd XI labels stay for filters only). */
+export const POOL_PRICE_BAND = { min: 5, max: 20 } as const;
+
+/** Legacy tier bands — starting listed prices only; live draft uses {@link POOL_PRICE_BAND}. */
 export const PRICE_BAND: Record<1 | 2, { min: number; max: number }> = {
   1: { min: 12, max: 20 },
   2: { min: 5, max: 10 },
 };
 
-/** Max £ rise/fall from base driven by form rank within tier. */
-export const MAX_FORM_PRICE_DELTA = 3;
+/** Max gap between listed price and performance target shown in Draft (before End GW). */
+export const MAX_FORM_PRICE_DELTA = POOL_PRICE_BAND.max - POOL_PRICE_BAND.min;
 
 const RECENT_FORM_WEEKS = 3;
+const SEASON_PPG_WEIGHT = 0.6;
+const RECENT_PPG_WEIGHT = 0.4;
 
 export type PricingHistoryWeek = {
   week: number;
@@ -56,15 +61,20 @@ export type PlayerForPricing = {
 };
 
 export type PlayerPricing = {
+  /** Listed price in Firestore (updates when a gameweek ends). */
   basePrice: number;
+  /** Performance-based draft price for this week. */
   effectivePrice: number;
   priceDelta: number;
+  /** Weighted pts-per-game value score used for ranking. */
   formScore: number;
+  /** Rank in pool by value (1 = hottest). Omitted when not in the priced pool. */
+  valueRank?: number;
+  pricedPoolSize?: number;
 };
 
-function clampPrice(n: number, tier: 1 | 2): number {
-  const band = PRICE_BAND[tier];
-  return Math.max(band.min, Math.min(band.max, Math.round(n)));
+function clampPoolPrice(n: number): number {
+  return Math.max(POOL_PRICE_BAND.min, Math.min(POOL_PRICE_BAND.max, Math.round(n)));
 }
 
 function weekPoints(rec: PricingHistoryWeek): number {
@@ -179,64 +189,70 @@ export function countDidNotPlayHistoryRepairs(before: PlayerForPricing[], after:
   return n;
 }
 
-/** Season total + weighted recent gameweeks (higher = hotter form). Did-not-play weeks are ignored. */
+/** Weighted pts-per-game: 60% season average + 40% last 3 played weeks. DNP weeks ignored. */
 export function formScoreForPlayer(p: PlayerForPricing): number {
   const played = playedHistoryWeeks(p.history);
-  let season = 0;
-  for (const h of played) {
-    season += weekPoints(h);
-  }
+  if (played.length === 0) return 0;
+  const seasonPts = played.reduce((s, h) => s + weekPoints(h), 0);
+  const seasonPpg = seasonPts / played.length;
   const recent = [...played].sort((a, b) => b.week - a.week).slice(0, RECENT_FORM_WEEKS);
-  const recentAvg = recent.length
+  const recentPpg = recent.length
     ? recent.reduce((s, h) => s + weekPoints(h), 0) / recent.length
-    : 0;
-  return Math.round((season + recentAvg * 2) * 10) / 10;
+    : seasonPpg;
+  return Math.round((seasonPpg * SEASON_PPG_WEIGHT + recentPpg * RECENT_PPG_WEIGHT) * 10) / 10;
 }
 
-function adjustmentFromFormRank(rankIndex: number, poolSize: number): number {
-  if (poolSize <= 1) return 0;
+/** Map rank (0 = best) to a draft price on the £5–£20 ladder. */
+export function targetPriceFromValueRank(rankIndex: number, poolSize: number): number {
+  if (poolSize <= 0) return POOL_PRICE_BAND.min;
+  if (poolSize === 1) return POOL_PRICE_BAND.max;
   const pct = rankIndex / (poolSize - 1);
-  if (pct <= 0.15) return MAX_FORM_PRICE_DELTA;
-  if (pct <= 0.35) return 2;
-  if (pct <= 0.65) return 1;
-  if (pct <= 0.85) return 0;
-  if (pct <= 0.95) return -1;
-  return -2;
+  const raw = POOL_PRICE_BAND.max - pct * (POOL_PRICE_BAND.max - POOL_PRICE_BAND.min);
+  return clampPoolPrice(raw);
 }
 
-export function computePlayerPricing(p: PlayerForPricing, pool: PlayerForPricing[]): PlayerPricing {
-  const tier = p.teamTier === 1 ? 1 : 2;
-  const basePrice = Math.max(1, Math.round(Number(p.price) || 1));
-  if (Boolean(p.didNotPlay) || !hasPlayedFormWeeks(p)) {
+function pricingEligible(p: PlayerForPricing): boolean {
+  return hasPlayedFormWeeks(p);
+}
+
+export function computePlayerPricing(
+  p: PlayerForPricing,
+  pool: PlayerForPricing[],
+  rankedPool?: { id: number; formScore: number }[],
+): PlayerPricing {
+  const basePrice = clampPoolPrice(Math.max(1, Math.round(Number(p.price) || 1)));
+  if (!pricingEligible(p)) {
     return { basePrice, effectivePrice: basePrice, priceDelta: 0, formScore: 0 };
   }
-  const tierPeers = pool.filter(
-    (x) => (x.teamTier === 1 ? 1 : 2) === tier && hasPlayedFormWeeks(x) && !x.didNotPlay,
-  );
-  if (tierPeers.length === 0) {
-    return { basePrice, effectivePrice: basePrice, priceDelta: 0, formScore: formScoreForPlayer(p) };
-  }
-  const scored = tierPeers
-    .map((peer) => ({ id: peer.id, formScore: formScoreForPlayer(peer) }))
-    .sort((a, b) => b.formScore - a.formScore || a.id - b.id);
+  const scored =
+    rankedPool ??
+    pool
+      .filter(pricingEligible)
+      .map((peer) => ({ id: peer.id, formScore: formScoreForPlayer(peer) }))
+      .sort((a, b) => b.formScore - a.formScore || a.id - b.id);
   const rankIndex = scored.findIndex((row) => row.id === p.id);
   if (rankIndex < 0) {
     return { basePrice, effectivePrice: basePrice, priceDelta: 0, formScore: formScoreForPlayer(p) };
   }
-  const delta = adjustmentFromFormRank(rankIndex, scored.length);
-  const effectivePrice = clampPrice(basePrice + delta, tier);
+  const effectivePrice = targetPriceFromValueRank(rankIndex, scored.length);
   return {
     basePrice,
     effectivePrice,
     priceDelta: effectivePrice - basePrice,
     formScore: formScoreForPlayer(p),
+    valueRank: rankIndex + 1,
+    pricedPoolSize: scored.length,
   };
 }
 
 export function computeDynamicPricingMap(players: PlayerForPricing[]): Map<number, PlayerPricing> {
+  const scored = players
+    .filter(pricingEligible)
+    .map((peer) => ({ id: peer.id, formScore: formScoreForPlayer(peer) }))
+    .sort((a, b) => b.formScore - a.formScore || a.id - b.id);
   const map = new Map<number, PlayerPricing>();
   for (const p of players) {
-    map.set(p.id, computePlayerPricing(p, players));
+    map.set(p.id, computePlayerPricing(p, players, scored));
   }
   return map;
 }
@@ -303,8 +319,7 @@ export type DynamicBudgetResult = {
 };
 
 /**
- * Squad cap tracks the market: cheapest legal squad + fixed headroom (clamped).
- * Still blocks all–1st-XI stacks; rises when form pushes prices up.
+ * Squad cap tracks the market: cheapest legal 2-2-2-1 + headroom (clamped).
  */
 export function computeDynamicBudget(
   players: PlayerForBudget[],

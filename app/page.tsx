@@ -79,7 +79,9 @@ import {
 import {
   computeDynamicBudget,
   computeDynamicPricingMap,
+  countDidNotPlayHistoryRepairs,
   MAX_FORM_PRICE_DELTA,
+  repairAllPlayersDidNotPlayHistory,
   repairHistoryDidNotPlayWeeks,
   squadBudgetStatus,
   withEffectivePrices,
@@ -1621,6 +1623,9 @@ export default function Page() {
   const [players, setPlayers] = useState<Player[]>(SEEDED_PLAYERS);
   const [teams, setTeams] = useState<SavedTeam[]>([]);
   const [currentGameweek, setCurrentGameweek] = useState(1);
+  const [dnpHistoryRepairDone, setDnpHistoryRepairDone] = useState(false);
+  const [dnpRepairNote, setDnpRepairNote] = useState<string | null>(null);
+  const pendingDnpHistoryRepairRef = useRef(false);
   const [fsReady, setFsReady] = useState(false);
   const [fsError, setFsError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -1723,8 +1728,10 @@ export default function Page() {
       if (snap.exists()) {
         const data = snap.data();
         setCurrentGameweek(data.currentGameweek ?? 1);
+        setDnpHistoryRepairDone(Boolean(data.dnpHistoryRepairDone));
       } else {
         setCurrentGameweek(1);
+        setDnpHistoryRepairDone(false);
       }
       setFsReady(true);
       setFsError(null);
@@ -2662,27 +2669,25 @@ export default function Page() {
     setActionError(null);
   }
 
-  function retrofixHistoryDidNotPlay() {
-    setLocalPlayers((prev) =>
-      prev.map((p) => {
-        const history = repairHistoryDidNotPlayWeeks(p.history);
-        const liveAllZero =
-          p.runs === 0 &&
-          p.fours === 0 &&
-          p.sixes === 0 &&
-          p.wickets === 0 &&
-          p.maidens === 0 &&
-          p.catches === 0 &&
-          p.wkCatches === 0 &&
-          p.stumpings === 0 &&
-          p.runOuts === 0;
-        if (p.didNotPlay || (liveAllZero && p.didNotBat)) {
-          return applyDidNotPlayToPlayer({ ...p, history }, true);
-        }
-        return { ...p, history };
-      }),
-    );
+  function applyAllPastWeeksDidNotPlayRepair() {
+    if (
+      !window.confirm(
+        "Mark every past gameweek (and this week’s blank rows) as Did not play where a player has all-zero stats and did not bat? Ducks (DNB off, 0 runs) are kept as played. Then click Save stats to persist — this one-time banner will disappear after save.",
+      )
+    ) {
+      return;
+    }
+    const source = unsavedStats ? localPlayers : players;
+    const repaired = repairAllPlayersDidNotPlayHistory(source);
+    const changed = countDidNotPlayHistoryRepairs(source, repaired);
+    setLocalPlayers(repaired);
     setUnsavedStats(true);
+    pendingDnpHistoryRepairRef.current = true;
+    setDnpRepairNote(
+      changed > 0
+        ? `Applied DNP to ${changed} player-week row(s). Click Save stats to write to Firebase.`
+        : "No rows needed changing — if prices still look wrong, check ducks have DNB unchecked.",
+    );
     setActionError(null);
   }
 
@@ -2874,6 +2879,16 @@ export default function Page() {
         }
         await batch.commit();
         statsSavePendingRef.current = committedSnapshot;
+        if (pendingDnpHistoryRepairRef.current) {
+          await setDoc(
+            doc(db, "gameState", "current"),
+            { dnpHistoryRepairDone: true },
+            { merge: true },
+          );
+          pendingDnpHistoryRepairRef.current = false;
+          setDnpHistoryRepairDone(true);
+          setDnpRepairNote(null);
+        }
       });
       setUnsavedStats(false);
       setSavedStatsFlash(true);
@@ -4604,6 +4619,25 @@ export default function Page() {
                       </div>
 
                       {/* Player stats table */}
+                      {!dnpHistoryRepairDone && adminAuthed ? (
+                        <div className="rounded-2xl border border-sky-500/35 bg-sky-500/10 px-4 py-3.5 text-sm text-sky-100 ring-1 ring-sky-500/25">
+                          <div className="font-semibold text-sky-50">One-time fix: Did not play on past gameweeks</div>
+                          <p className="mt-1.5 leading-relaxed text-sky-100/90">
+                            Before dynamic pricing, non-squad players may have been saved as DNB with zeros. This marks every past week (and blank current rows) as{" "}
+                            <strong className="text-white">Did not play</strong> so they keep base price. Ducks stay as played (DNB unchecked).
+                          </p>
+                          {dnpRepairNote ? (
+                            <p className="mt-2 text-xs font-medium text-emerald-200">{dnpRepairNote}</p>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={applyAllPastWeeksDidNotPlayRepair}
+                            className="mt-3 rounded-xl bg-sky-600 px-3 py-2 text-xs font-bold text-white ring-1 ring-sky-500/50 hover:bg-sky-500"
+                          >
+                            Apply DNP fix to all past weeks
+                          </button>
+                        </div>
+                      ) : null}
                       <div className="rounded-2xl bg-white/5 ring-1 ring-white/10">
                         <div className="flex flex-col gap-3 border-b border-white/10 p-4 sm:p-5 lg:flex-row lg:items-center lg:justify-between">
                           <div className="min-w-0 lg:pr-3">
@@ -4639,14 +4673,6 @@ export default function Page() {
                               className="inline-flex items-center gap-2 rounded-xl bg-sky-600/15 px-3 py-2 text-xs font-semibold text-sky-200 ring-1 ring-sky-500/35 transition hover:bg-sky-600/25"
                             >
                               Select 22 who played
-                            </button>
-                            <button
-                              type="button"
-                              onClick={retrofixHistoryDidNotPlay}
-                              className="inline-flex items-center gap-2 rounded-xl bg-zinc-600/20 px-3 py-2 text-xs font-semibold text-zinc-200 ring-1 ring-zinc-500/35 transition hover:bg-zinc-600/30"
-                              title="Convert all-zero DNB weeks in history to Did not play (keeps listed base price)"
-                            >
-                              Retrofix DNP in history
                             </button>
                             <button type="button" onClick={() => void saveStats()} disabled={!unsavedStats || savingStats}
                               className={["inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold ring-1 transition",

@@ -33,6 +33,7 @@ export type PricingHistoryWeek = {
   runOuts?: number;
   didNotBat?: boolean;
   didNotPlay?: boolean;
+  notOut?: boolean;
 };
 
 export type PlayerForPricing = {
@@ -51,6 +52,7 @@ export type PlayerForPricing = {
   runOuts?: number;
   didNotBat?: boolean;
   didNotPlay?: boolean;
+  notOut?: boolean;
 };
 
 export type PlayerPricing = {
@@ -91,36 +93,90 @@ export function hasPlayedFormWeeks(p: PlayerForPricing): boolean {
   return playedHistoryWeeks(p.history).length > 0;
 }
 
-/** All-zero week that was wrongly tagged DNB — treat as did not play for form/pricing. */
+export function statLineAllZero(
+  line: Pick<
+    PricingHistoryWeek,
+    "runs" | "fours" | "sixes" | "wickets" | "maidens" | "catches" | "wkCatches" | "stumpings" | "runOuts"
+  >,
+): boolean {
+  return (
+    (Number(line.runs) || 0) === 0 &&
+    (Number(line.fours) || 0) === 0 &&
+    (Number(line.sixes) || 0) === 0 &&
+    (Number(line.wickets) || 0) === 0 &&
+    (Number(line.maidens) || 0) === 0 &&
+    (Number(line.catches) || 0) === 0 &&
+    (Number(line.wkCatches) || 0) === 0 &&
+    (Number(line.stumpings) || 0) === 0 &&
+    (Number(line.runOuts) || 0) === 0
+  );
+}
+
+/** All-zero week with no sign they batted — treat as did not play for form/pricing. */
 export function historyWeekLooksLikeDidNotPlay(h: PricingHistoryWeek): boolean {
   if (h.didNotPlay) return true;
-  const runs = Number(h.runs) || 0;
-  const wickets = Number(h.wickets) || 0;
-  const fours = Number(h.fours) || 0;
-  const sixes = Number(h.sixes) || 0;
-  const maidens = Number(h.maidens) || 0;
-  const catches = Number(h.catches) || 0;
-  const wkCatches = Number(h.wkCatches) || 0;
-  const stumpings = Number(h.stumpings) || 0;
-  const runOuts = Number(h.runOuts) || 0;
-  const allZero =
-    runs === 0 &&
-    wickets === 0 &&
-    fours === 0 &&
-    sixes === 0 &&
-    maidens === 0 &&
-    catches === 0 &&
-    wkCatches === 0 &&
-    stumpings === 0 &&
-    runOuts === 0;
-  return allZero && Boolean(h.didNotBat);
+  if (Boolean(h.notOut)) return false;
+  if (h.didNotBat === false) return false;
+  return statLineAllZero(h);
+}
+
+export function liveRowLooksLikeDidNotPlay(p: PlayerForPricing): boolean {
+  if (p.didNotPlay) return true;
+  if (Boolean(p.notOut)) return false;
+  if (p.didNotBat === false) return false;
+  return statLineAllZero(p);
 }
 
 export function repairHistoryDidNotPlayWeeks<T extends PricingHistoryWeek>(history: T[] | undefined): T[] {
   return (history ?? []).map((h) => {
     if (!historyWeekLooksLikeDidNotPlay(h)) return h;
-    return { ...h, didNotPlay: true, didNotBat: false, points: 0 };
+    return { ...h, didNotPlay: true, didNotBat: false, notOut: false, points: 0 };
   });
+}
+
+export function repairPlayerDidNotPlayHistory<T extends PlayerForPricing>(p: T): T {
+  const history = repairHistoryDidNotPlayWeeks(p.history);
+  if (!liveRowLooksLikeDidNotPlay(p)) {
+    return { ...p, history };
+  }
+  return {
+    ...p,
+    history,
+    didNotPlay: true,
+    didNotBat: false,
+    notOut: false,
+    runs: 0,
+    fours: 0,
+    sixes: 0,
+    wickets: 0,
+    maidens: 0,
+    catches: 0,
+    wkCatches: 0,
+    stumpings: 0,
+    runOuts: 0,
+  };
+}
+
+/** One-time bulk fix: every past GW row that looks like non-participation → didNotPlay. */
+export function repairAllPlayersDidNotPlayHistory<T extends PlayerForPricing>(players: T[]): T[] {
+  return players.map(repairPlayerDidNotPlayHistory);
+}
+
+export function countDidNotPlayHistoryRepairs(before: PlayerForPricing[], after: PlayerForPricing[]): number {
+  let n = 0;
+  for (let i = 0; i < before.length; i++) {
+    const a = before[i];
+    const b = after[i];
+    if (!a || !b || a.id !== b.id) continue;
+    const bh = b.history ?? [];
+    const ah = a.history ?? [];
+    for (let w = 0; w < bh.length; w++) {
+      if (!bh[w]?.didNotPlay) continue;
+      if (!ah[w]?.didNotPlay) n += 1;
+    }
+    if (b.didNotPlay && !a.didNotPlay) n += 1;
+  }
+  return n;
 }
 
 /** Season total + weighted recent gameweeks (higher = hotter form). Did-not-play weeks are ignored. */

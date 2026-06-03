@@ -168,6 +168,143 @@ type WeekRecord = {
   notOut?: boolean;
 };
 
+function weekRecordFromPlayer(p: Player, week: number, currentGameweek: number): WeekRecord | null {
+  const fromHist = (p.history ?? []).find((h) => h.week === week);
+  if (fromHist) return fromHist;
+  if (week !== currentGameweek) return null;
+  return {
+    week,
+    runs: p.runs,
+    fours: p.fours,
+    sixes: p.sixes,
+    wickets: p.wickets,
+    maidens: p.maidens,
+    catches: p.catches,
+    wkCatches: p.wkCatches,
+    stumpings: p.stumpings,
+    runOuts: p.runOuts,
+    points: calculatePoints(p),
+    didNotBat: p.didNotBat,
+    didNotPlay: p.didNotPlay,
+    notOut: p.notOut,
+  };
+}
+
+function weekAuditStatSummary(h: WeekRecord): string {
+  const parts: string[] = [];
+  if (h.runs || h.fours || h.sixes) {
+    parts.push(`R ${h.runs}${h.fours ? ` · 4s ${h.fours}` : ""}${h.sixes ? ` · 6s ${h.sixes}` : ""}`);
+  }
+  if (h.wickets) parts.push(`W ${h.wickets}${h.maidens ? ` · M ${h.maidens}` : ""}`);
+  const field = (h.catches ?? 0) + (h.wkCatches ?? 0) + (h.stumpings ?? 0) + (h.runOuts ?? 0);
+  if (field) parts.push(`Fld ${field}`);
+  return parts.length ? parts.join(" · ") : "all stats zero";
+}
+
+function weekAuditTooltip(h: WeekRecord): string {
+  const status = h.didNotPlay ? "Did not play" : h.didNotBat ? "Did not bat (in XI)" : h.notOut ? "Batted (not out)" : "Played";
+  return `GW${h.week}: ${status} — ${h.points} pts. ${weekAuditStatSummary(h)}`;
+}
+
+function weekRecordLooksLikeSuspiciousDnp(h: WeekRecord): boolean {
+  if (!h.didNotPlay) return false;
+  return (
+    h.runs === 0 &&
+    !h.fours &&
+    !h.sixes &&
+    !h.wickets &&
+    !h.maidens &&
+    !h.catches &&
+    !h.wkCatches &&
+    !h.stumpings &&
+    !h.runOuts
+  );
+}
+
+function emptyWeekRecord(week: number): WeekRecord {
+  return {
+    week,
+    runs: 0,
+    fours: 0,
+    sixes: 0,
+    wickets: 0,
+    maidens: 0,
+    catches: 0,
+    wkCatches: 0,
+    stumpings: 0,
+    runOuts: 0,
+    points: 0,
+    didNotBat: false,
+    didNotPlay: false,
+    notOut: false,
+  };
+}
+
+function weekRecordHasPlayedStat(
+  h: Pick<
+    WeekRecord,
+    "runs" | "fours" | "sixes" | "wickets" | "maidens" | "catches" | "wkCatches" | "stumpings" | "runOuts"
+  >,
+): boolean {
+  return (
+    h.runs > 0 ||
+    h.fours > 0 ||
+    h.sixes > 0 ||
+    h.wickets > 0 ||
+    h.maidens > 0 ||
+    h.catches > 0 ||
+    h.wkCatches > 0 ||
+    h.stumpings > 0 ||
+    h.runOuts > 0
+  );
+}
+
+function finalizeWeekRecord(record: WeekRecord): WeekRecord {
+  const next = { ...record };
+  if (weekRecordHasPlayedStat(next) && next.didNotPlay) {
+    next.didNotPlay = false;
+  }
+  return { ...next, points: calculatePoints(next) };
+}
+
+function applyHistoryWeekDidNotPlay(record: WeekRecord, on: boolean): WeekRecord {
+  if (!on) {
+    return finalizeWeekRecord({ ...record, didNotPlay: false });
+  }
+  return finalizeWeekRecord({
+    ...record,
+    didNotPlay: true,
+    didNotBat: false,
+    notOut: false,
+    runs: 0,
+    fours: 0,
+    sixes: 0,
+    wickets: 0,
+    maidens: 0,
+    catches: 0,
+    wkCatches: 0,
+    stumpings: 0,
+    runOuts: 0,
+  });
+}
+
+function weekRecordToLivePlayerFields(record: WeekRecord): Partial<Player> {
+  return {
+    runs: record.runs,
+    fours: record.fours,
+    sixes: record.sixes,
+    wickets: record.wickets,
+    maidens: record.maidens,
+    catches: record.catches,
+    wkCatches: record.wkCatches,
+    stumpings: record.stumpings,
+    runOuts: record.runOuts,
+    didNotBat: record.didNotBat,
+    didNotPlay: record.didNotPlay,
+    notOut: record.notOut,
+  };
+}
+
 /** 1 = 1st XI (premium prices), 2 = 2nd XI (value picks). */
 type TeamTier = 1 | 2;
 
@@ -1538,6 +1675,204 @@ function resolveOwnerDisplayName(team: SavedTeam, authUser: User | null): string
   return "Unknown";
 }
 
+function AdminHistoryWeekEditorModal({
+  playerName,
+  week,
+  isLive,
+  record,
+  onClose,
+  onEdit,
+  onToggleDidNotPlay,
+}: {
+  playerName: string;
+  week: number;
+  isLive: boolean;
+  record: WeekRecord;
+  onClose: () => void;
+  onEdit: (patch: Partial<WeekRecord>) => void;
+  onToggleDidNotPlay: (on: boolean) => void;
+}) {
+  const r = record;
+  const dnp = Boolean(r.didNotPlay);
+  const dnb = Boolean(r.didNotBat);
+  return (
+    <div
+      role="presentation"
+      className="fixed inset-0 z-[96] flex items-center justify-center bg-black/70 p-3 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="history-week-editor-title"
+        className="flex max-h-[min(92dvh,100%)] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-zinc-950 ring-1 ring-white/10"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/10 px-5 py-4">
+          <div className="min-w-0">
+            <div id="history-week-editor-title" className="truncate text-lg font-bold text-white">
+              {playerName} · GW{week}
+            </div>
+            <p className="mt-1 text-xs leading-relaxed text-zinc-400">
+              {isLive
+                ? "Editing the live gameweek row — same as the Player stats table below."
+                : "Editing a past gameweek. Click Save stats when finished to persist."}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/5 text-zinc-300 ring-1 ring-white/10 hover:bg-white/10 hover:text-white"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="overflow-auto px-5 py-4">
+          <div className="mb-4 flex flex-wrap items-center gap-3">
+            <label className="flex cursor-pointer items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-zinc-400">
+              <input
+                type="checkbox"
+                checked={dnp}
+                onChange={(e) => onToggleDidNotPlay(e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-white/20 bg-white/10 text-zinc-400 focus:ring-zinc-500/50"
+              />
+              DNP
+            </label>
+            <label className="flex cursor-pointer items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-sky-300/90">
+              <input
+                type="checkbox"
+                checked={dnb}
+                disabled={dnp}
+                onChange={(e) => {
+                  const on = e.target.checked;
+                  onEdit(on ? { didNotBat: true, notOut: false, runs: 0, fours: 0, sixes: 0 } : { didNotBat: false });
+                }}
+                className="h-3.5 w-3.5 rounded border-white/20 bg-white/10 text-sky-500 focus:ring-sky-500/50 disabled:opacity-40"
+              />
+              DNB
+            </label>
+            <label className="flex cursor-pointer items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-emerald-300/90">
+              <input
+                type="checkbox"
+                checked={Boolean(r.notOut)}
+                disabled={dnp || dnb}
+                onChange={(e) =>
+                  onEdit(e.target.checked ? { notOut: true, didNotBat: false } : { notOut: false })
+                }
+                className="h-3.5 w-3.5 rounded border-white/20 bg-white/10 text-emerald-500 focus:ring-emerald-500/50 disabled:opacity-40"
+              />
+              NO
+            </label>
+            <div className="ml-auto text-sm font-bold tabular-nums text-white">{r.points} pts</div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <label className="block sm:col-span-2">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Runs</div>
+              <NumberInput
+                variant="field"
+                value={r.runs}
+                disabled={dnp || dnb}
+                onChange={(v) => onEdit({ runs: v, ...(v > 0 ? { didNotBat: false } : {}) })}
+                className="text-center"
+              />
+            </label>
+            <label className="block">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">4s</div>
+              <NumberInput
+                variant="field"
+                value={r.fours}
+                disabled={dnp || dnb}
+                onChange={(v) => onEdit({ fours: v, ...(v > 0 ? { didNotBat: false } : {}) })}
+                className="text-center"
+              />
+            </label>
+            <label className="block">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">6s</div>
+              <NumberInput
+                variant="field"
+                value={r.sixes}
+                disabled={dnp || dnb}
+                onChange={(v) => onEdit({ sixes: v, ...(v > 0 ? { didNotBat: false } : {}) })}
+                className="text-center"
+              />
+            </label>
+            <label className="block">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Wkts</div>
+              <NumberInput
+                variant="field"
+                value={r.wickets}
+                disabled={dnp}
+                onChange={(v) => onEdit({ wickets: v })}
+                className="text-center"
+              />
+            </label>
+            <label className="block">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Maidens</div>
+              <NumberInput
+                variant="field"
+                value={r.maidens}
+                disabled={dnp}
+                onChange={(v) => onEdit({ maidens: v })}
+                className="text-center"
+              />
+            </label>
+            <label className="block">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Catches</div>
+              <NumberInput
+                variant="field"
+                value={r.catches}
+                disabled={dnp}
+                onChange={(v) => onEdit({ catches: v })}
+                className="text-center"
+              />
+            </label>
+            <label className="block">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">WK c.</div>
+              <NumberInput
+                variant="field"
+                value={r.wkCatches}
+                disabled={dnp}
+                onChange={(v) => onEdit({ wkCatches: v })}
+                className="text-center"
+              />
+            </label>
+            <label className="block">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Stump.</div>
+              <NumberInput
+                variant="field"
+                value={r.stumpings}
+                disabled={dnp}
+                onChange={(v) => onEdit({ stumpings: v })}
+                className="text-center"
+              />
+            </label>
+            <label className="block">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">RO</div>
+              <NumberInput
+                variant="field"
+                value={r.runOuts}
+                disabled={dnp}
+                onChange={(v) => onEdit({ runOuts: v })}
+                className="text-center"
+              />
+            </label>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-white/10 px-5 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl bg-red-600 px-4 py-2 text-xs font-semibold text-white ring-1 ring-red-500/40 hover:bg-red-500"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AdminStatsSortTh({
   label,
   colKey,
@@ -1671,6 +2006,11 @@ export default function Page() {
   const [playedPickerOpen, setPlayedPickerOpen] = useState(false);
   const [playedPickerIds, setPlayedPickerIds] = useState<number[]>([]);
   const [showOnlyPlayedRows, setShowOnlyPlayedRows] = useState(false);
+  const [weeklyAuditOpen, setWeeklyAuditOpen] = useState(true);
+  const [weeklyAuditDnpOnly, setWeeklyAuditDnpOnly] = useState(false);
+  const [weeklyAuditSuspiciousOnly, setWeeklyAuditSuspiciousOnly] = useState(false);
+  const [weeklyAuditQuery, setWeeklyAuditQuery] = useState("");
+  const [historyWeekEdit, setHistoryWeekEdit] = useState<{ playerId: number; week: number } | null>(null);
   const [adminStatsSort, setAdminStatsSort] = useState<{ key: AdminStatsSortKey; dir: "asc" | "desc" }>({
     key: "name",
     dir: "asc",
@@ -2255,6 +2595,48 @@ export default function Page() {
     return adminSortedPlayers.filter((p) => played.has(p.id));
   }, [adminSortedPlayers, showOnlyPlayedRows, playedPickerIds]);
 
+  const auditGameweeks = useMemo(() => {
+    const weeks = new Set(gwTeamsArchive.map((g) => g.gameweek));
+    if (currentGameweek >= 1) weeks.add(currentGameweek);
+    return [...weeks].sort((a, b) => a - b);
+  }, [gwTeamsArchive, currentGameweek]);
+
+  const weeklyAuditPlayers = useMemo(() => {
+    const source = unsavedStats ? localPlayers : players;
+    const q = weeklyAuditQuery.trim().toLowerCase();
+    let rows = [...source].sort((a, b) => a.name.localeCompare(b.name));
+    if (q) rows = rows.filter((p) => p.name.toLowerCase().includes(q));
+    if (weeklyAuditDnpOnly || weeklyAuditSuspiciousOnly) {
+      rows = rows.filter((p) =>
+        auditGameweeks.some((week) => {
+          const h = weekRecordFromPlayer(p, week, currentGameweek);
+          if (!h) return false;
+          if (weeklyAuditSuspiciousOnly) return weekRecordLooksLikeSuspiciousDnp(h);
+          return Boolean(h.didNotPlay);
+        }),
+      );
+    }
+    return rows;
+  }, [
+    unsavedStats,
+    localPlayers,
+    players,
+    weeklyAuditQuery,
+    weeklyAuditDnpOnly,
+    weeklyAuditSuspiciousOnly,
+    auditGameweeks,
+    currentGameweek,
+  ]);
+
+  const historyWeekEditCtx = useMemo(() => {
+    if (!historyWeekEdit) return null;
+    const p = localPlayers.find((x) => x.id === historyWeekEdit.playerId);
+    if (!p) return null;
+    const { week } = historyWeekEdit;
+    const record = weekRecordFromPlayer(p, week, currentGameweek) ?? emptyWeekRecord(week);
+    return { player: p, week, record, isLive: week === currentGameweek };
+  }, [historyWeekEdit, localPlayers, currentGameweek]);
+
   const validation = useMemo(() => validateTeam({
     teamName: builder.teamName, selected: builder.selected,
     captain: builder.captain, viceCaptain: builder.viceCaptain,
@@ -2689,6 +3071,56 @@ export default function Page() {
         : "No rows needed changing — if prices still look wrong, check ducks have DNB unchecked.",
     );
     setActionError(null);
+  }
+
+  function openHistoryWeekEdit(playerId: number, week: number) {
+    setHistoryWeekEdit({ playerId, week });
+    setActionError(null);
+  }
+
+  function editHistoryWeek(playerId: number, week: number, patch: Partial<WeekRecord>) {
+    setLocalPlayers((prev) =>
+      prev.map((p) => {
+        if (p.id !== playerId) return p;
+        if (week === currentGameweek) {
+          const current = weekRecordFromPlayer(p, week, currentGameweek) ?? emptyWeekRecord(week);
+          const merged = finalizeWeekRecord({ ...current, ...patch });
+          return { ...p, ...weekRecordToLivePlayerFields(merged) };
+        }
+        const history = [...(p.history ?? [])];
+        const idx = history.findIndex((h) => h.week === week);
+        if (idx >= 0) {
+          history[idx] = finalizeWeekRecord({ ...history[idx], ...patch });
+        } else {
+          history.push(finalizeWeekRecord({ ...emptyWeekRecord(week), ...patch }));
+          history.sort((a, b) => a.week - b.week);
+        }
+        return { ...p, history };
+      }),
+    );
+    setUnsavedStats(true);
+  }
+
+  function toggleHistoryWeekDidNotPlay(playerId: number, week: number, on: boolean) {
+    setLocalPlayers((prev) =>
+      prev.map((p) => {
+        if (p.id !== playerId) return p;
+        if (week === currentGameweek) {
+          return on ? applyDidNotPlayToPlayer(p, true) : { ...p, didNotPlay: false };
+        }
+        const history = [...(p.history ?? [])];
+        const idx = history.findIndex((h) => h.week === week);
+        const base = idx >= 0 ? history[idx] : emptyWeekRecord(week);
+        const next = applyHistoryWeekDidNotPlay(base, on);
+        if (idx >= 0) history[idx] = next;
+        else {
+          history.push(next);
+          history.sort((a, b) => a.week - b.week);
+        }
+        return { ...p, history };
+      }),
+    );
+    setUnsavedStats(true);
   }
 
   function applyPlayedPicker() {
@@ -4638,6 +5070,151 @@ export default function Page() {
                           </button>
                         </div>
                       ) : null}
+
+                      <div className="rounded-2xl bg-white/5 ring-1 ring-white/10">
+                        <div className="flex flex-col gap-3 border-b border-white/10 p-4 sm:p-5 lg:flex-row lg:items-start lg:justify-between">
+                          <div className="min-w-0 lg:pr-3">
+                            <button
+                              type="button"
+                              onClick={() => setWeeklyAuditOpen((v) => !v)}
+                              className="inline-flex items-center gap-2 text-sm font-semibold text-white hover:text-zinc-200"
+                            >
+                              Weekly performance audit
+                              {weeklyAuditOpen ? <ChevronUp className="h-4 w-4 text-zinc-400" /> : <ChevronDown className="h-4 w-4 text-zinc-400" />}
+                            </button>
+                            <p className="mt-1 max-w-3xl text-xs leading-relaxed text-zinc-500">
+                              Every player × every gameweek: points, DNP (did not play), DNB (in XI but did not bat), and stat summary.
+                              Amber cells are DNP with all-zero stats — often wrong if they were in the playing XI but only fielded.
+                              Click any cell to edit that week&apos;s stats (runs, fielding, DNP/DNB). Then Save stats to persist.
+                              On the <strong className="font-medium text-zinc-400">Players</strong> tab, select up to four names to compare points per GW on a chart.
+                            </p>
+                          </div>
+                          {weeklyAuditOpen ? (
+                            <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end">
+                              <label className="relative min-w-[10rem] flex-1 sm:flex-none sm:w-44">
+                                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+                                <input
+                                  value={weeklyAuditQuery}
+                                  onChange={(e) => setWeeklyAuditQuery(e.target.value)}
+                                  placeholder="Filter by name…"
+                                  className="w-full rounded-xl bg-white/5 py-2 pl-8 pr-3 text-xs text-white placeholder:text-zinc-500 ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-red-500/60"
+                                />
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => setWeeklyAuditDnpOnly((v) => !v)}
+                                className={["rounded-xl px-3 py-2 text-xs font-semibold ring-1 transition",
+                                  weeklyAuditDnpOnly
+                                    ? "bg-zinc-600/30 text-zinc-100 ring-zinc-500/40"
+                                    : "bg-white/5 text-zinc-300 ring-white/10 hover:bg-white/10"].join(" ")}
+                              >
+                                DNP weeks only
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setWeeklyAuditSuspiciousOnly((v) => !v)}
+                                className={["rounded-xl px-3 py-2 text-xs font-semibold ring-1 transition",
+                                  weeklyAuditSuspiciousOnly
+                                    ? "bg-amber-600/20 text-amber-100 ring-amber-500/40"
+                                    : "bg-white/5 text-zinc-300 ring-white/10 hover:bg-white/10"].join(" ")}
+                              >
+                                Review zeros
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                        {weeklyAuditOpen ? (
+                          auditGameweeks.length === 0 ? (
+                            <div className="p-5 text-sm text-zinc-500">No completed gameweeks yet.</div>
+                          ) : (
+                            <div className="max-h-[min(70vh,36rem)] overflow-auto">
+                              <table className="w-full min-w-max border-collapse text-xs">
+                                <thead className="sticky top-0 z-20 bg-zinc-950/95 backdrop-blur">
+                                  <tr className="border-b border-white/10 text-left text-[10px] uppercase tracking-wide text-zinc-500">
+                                    <th className="sticky left-0 z-30 min-w-[9rem] bg-zinc-950/95 px-3 py-2 font-semibold">Player</th>
+                                    {auditGameweeks.map((week) => (
+                                      <th key={week} className="min-w-[4.5rem] px-1.5 py-2 text-center font-semibold">
+                                        GW{week}
+                                        {week === currentGameweek ? <span className="block text-[9px] font-normal normal-case text-sky-400">live</span> : null}
+                                      </th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {weeklyAuditPlayers.map((p) => (
+                                    <tr key={p.id} className="border-b border-white/5 hover:bg-white/[0.02]">
+                                      <td className="sticky left-0 z-10 bg-zinc-950/90 px-3 py-1.5 font-medium text-zinc-200">
+                                        <span className="block truncate max-w-[9rem]" title={p.name}>{p.name}</span>
+                                        <span className="text-[10px] text-zinc-500">{p.teamTier === 1 ? "1st" : "2nd"} · {p.role.toUpperCase()}</span>
+                                      </td>
+                                      {auditGameweeks.map((week) => {
+                                        const h = weekRecordFromPlayer(p, week, currentGameweek);
+                                        if (!h) {
+                                          return (
+                                            <td key={week} className="px-1 py-1">
+                                              <button
+                                                type="button"
+                                                title={`GW${week}: no record — click to add stats`}
+                                                onClick={() => openHistoryWeekEdit(p.id, week)}
+                                                className="mx-auto flex w-full min-w-[4.25rem] items-center justify-center rounded-lg px-1 py-2 text-zinc-600 ring-1 ring-white/5 transition hover:bg-white/5 hover:text-zinc-400"
+                                              >
+                                                —
+                                              </button>
+                                            </td>
+                                          );
+                                        }
+                                        const suspicious = weekRecordLooksLikeSuspiciousDnp(h);
+                                        const isDnp = Boolean(h.didNotPlay);
+                                        const isDnb = !isDnp && Boolean(h.didNotBat);
+                                        const cellTitle = `${weekAuditTooltip(h)}\n\nClick to edit this week.`;
+                                        if (isDnp) {
+                                          return (
+                                            <td key={week} className="px-1 py-1">
+                                              <button
+                                                type="button"
+                                                title={cellTitle}
+                                                onClick={() => openHistoryWeekEdit(p.id, week)}
+                                                className={["mx-auto flex w-full min-w-[4.25rem] flex-col items-center rounded-lg px-1 py-1 ring-1 transition hover:brightness-110",
+                                                  suspicious
+                                                    ? "bg-amber-500/15 text-amber-100 ring-amber-500/35"
+                                                    : "bg-zinc-800/60 text-zinc-400 ring-zinc-600/30"].join(" ")}
+                                              >
+                                                <span className="font-bold leading-none">DNP</span>
+                                                <span className="mt-0.5 text-[10px] opacity-80">0 pts</span>
+                                              </button>
+                                            </td>
+                                          );
+                                        }
+                                        return (
+                                          <td key={week} className="px-1 py-1">
+                                            <button
+                                              type="button"
+                                              title={cellTitle}
+                                              onClick={() => openHistoryWeekEdit(p.id, week)}
+                                              className={["mx-auto flex w-full min-w-[4.25rem] flex-col items-center rounded-lg px-1 py-1.5 ring-1 ring-transparent transition hover:bg-white/5 hover:ring-white/10",
+                                                isDnb ? "text-sky-300" : h.points > 0 ? "text-emerald-300" : "text-zinc-400"].join(" ")}
+                                            >
+                                              <span className="font-semibold tabular-nums leading-none">{h.points} pts</span>
+                                              {isDnb ? <span className="mt-0.5 text-[10px] text-sky-400/80">DNB</span> : null}
+                                              <span className="mt-0.5 line-clamp-2 text-[10px] leading-tight text-zinc-500">
+                                                {weekAuditStatSummary(h)}
+                                              </span>
+                                            </button>
+                                          </td>
+                                        );
+                                      })}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                              {weeklyAuditPlayers.length === 0 ? (
+                                <div className="border-t border-white/10 p-4 text-center text-sm text-zinc-500">No players match this filter.</div>
+                              ) : null}
+                            </div>
+                          )
+                        ) : null}
+                      </div>
+
                       <div className="rounded-2xl bg-white/5 ring-1 ring-white/10">
                         <div className="flex flex-col gap-3 border-b border-white/10 p-4 sm:p-5 lg:flex-row lg:items-center lg:justify-between">
                           <div className="min-w-0 lg:pr-3">
@@ -4974,6 +5551,20 @@ export default function Page() {
 
         </main>
       </div>
+
+      {historyWeekEditCtx ? (
+        <AdminHistoryWeekEditorModal
+          playerName={historyWeekEditCtx.player.name}
+          week={historyWeekEditCtx.week}
+          isLive={historyWeekEditCtx.isLive}
+          record={historyWeekEditCtx.record}
+          onClose={() => setHistoryWeekEdit(null)}
+          onEdit={(patch) => editHistoryWeek(historyWeekEditCtx.player.id, historyWeekEditCtx.week, patch)}
+          onToggleDidNotPlay={(on) =>
+            toggleHistoryWeekDidNotPlay(historyWeekEditCtx.player.id, historyWeekEditCtx.week, on)
+          }
+        />
+      ) : null}
 
       {playedPickerOpen ? (
         <div

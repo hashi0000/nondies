@@ -56,6 +56,7 @@ import {
   MAX_BANKED_FREE_TRANSFERS,
   POINTS_PER_EXTRA_TRANSFER,
   PRE_DYNAMIC_PRICING_SNAPSHOT_GW,
+  PROVISIONAL_SQUAD_SHAPE,
   type PlayerRole,
   ROLE_LABEL,
   SQUAD_ROLES,
@@ -1221,7 +1222,7 @@ function validateTeam(args: {
   const problems: string[] = [];
   if (!checks.teamName) problems.push("Enter a team name.");
   if (!checks.count) problems.push(`Pick exactly ${SQUAD_SIZE} players.`);
-  if (!checks.composition) {
+  if (!checks.composition && !PROVISIONAL_SQUAD_SHAPE) {
     const c = countRolesInSelection(selected, byId);
     problems.push(
       `Squad must be ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} wicketkeeper (currently ${c.bat}/${c.ar}/${c.bowl}/${c.wk}).`,
@@ -1243,6 +1244,9 @@ function validateTeam(args: {
     );
   }
   if (!checks.allAvailable) problems.push("Remove unavailable players from your squad.");
+  if (PROVISIONAL_SQUAD_SHAPE) {
+    checks.composition = true;
+  }
   if (grandfatheredRelaxed) {
     if (selected.length === 0) {
       problems.push("Pick at least one player to save.");
@@ -1306,7 +1310,7 @@ function evaluateSavedTeamHealth(
   }
 
   if (n === SQUAD_SIZE) {
-    if (!squadCompositionOk(team.players, byId)) {
+    if (!PROVISIONAL_SQUAD_SHAPE && !squadCompositionOk(team.players, byId)) {
       const c = countRolesInSelection(team.players, byId);
       labels.push(`Wrong shape ${c.bat}-${c.ar}-${c.bowl}-${c.wk}`);
       severity = Math.max(severity, 75);
@@ -4720,8 +4724,12 @@ export default function Page() {
                             ["Players", `${selectedCount}/${SQUAD_SIZE}`, validation.checks.count],
                             [
                               "Shape",
-                              `Bat ${draftRoleCounts.bat}/${SQUAD_ROLES.bat} · AR ${draftRoleCounts.ar}/${SQUAD_ROLES.ar} · Bowl ${draftRoleCounts.bowl}/${SQUAD_ROLES.bowl} · WK ${draftRoleCounts.wk}/${SQUAD_ROLES.wk}`,
-                              validation.checks.composition,
+                              `Bat ${draftRoleCounts.bat}/${SQUAD_ROLES.bat} · AR ${draftRoleCounts.ar}/${SQUAD_ROLES.ar} · Bowl ${draftRoleCounts.bowl}/${SQUAD_ROLES.bowl} · WK ${draftRoleCounts.wk}/${SQUAD_ROLES.wk}${
+                                PROVISIONAL_SQUAD_SHAPE && !squadCompositionOk(builder.selected, playersById) && selectedCount === SQUAD_SIZE
+                                  ? " · provisional OK"
+                                  : ""
+                              }`,
+                              PROVISIONAL_SQUAD_SHAPE ? true : validation.checks.composition,
                             ],
                             ["Budget", `${money(validation.spend)} / ${money(squadBudget)}`, validation.checks.withinBudget],
                             ["Captain", builder.captain ? "Selected" : "Missing", validation.checks.captain],
@@ -4937,7 +4945,7 @@ export default function Page() {
                             {teamsNeedingFix.length} team{teamsNeedingFix.length === 1 ? "" : "s"} need to fix their squad
                           </div>
                           <p className="mt-1 leading-relaxed text-amber-100/90">
-                            New teams must fit the dynamic cap and valid 2-2-2-1 shape. Original season squads keep scoring as saved (even wrong shape) and are not flagged below.
+                            New teams must fit the dynamic cap. Wrong 2-2-2-1 shape is allowed provisionally — squads still score. Original season squads are not flagged below.
                           </p>
                           <div className="mt-2 flex flex-wrap gap-1.5">
                             {teamsNeedingFix.map((row) => (

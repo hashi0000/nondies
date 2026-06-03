@@ -12,6 +12,7 @@ import {
   MAX_BANKED_FREE_TRANSFERS,
   POINTS_PER_EXTRA_TRANSFER,
   PRE_DYNAMIC_PRICING_SNAPSHOT_GW,
+  PROVISIONAL_SQUAD_SHAPE,
   ROLE_LABEL,
   SQUAD_ROLES,
   SQUAD_SIZE,
@@ -266,12 +267,19 @@ export default function RulesPage() {
                   </ul>
                 </Card>
                 <Card>
-                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-2">Squad composition (enforced in app)</div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-2">
+                    Squad composition ({PROVISIONAL_SQUAD_SHAPE ? "recommended — provisional" : "enforced in app"})
+                  </div>
                   <p className="text-sm text-zinc-400 mb-3">
-                    Each saved squad must have exactly <strong className="text-white">{SQUAD_ROLES.bat} {ROLE_LABEL.bat}s</strong>,{" "}
+                    The ideal squad is <strong className="text-white">{SQUAD_ROLES.bat} {ROLE_LABEL.bat}s</strong>,{" "}
                     <strong className="text-white">{SQUAD_ROLES.ar} {ROLE_LABEL.ar}s</strong>, <strong className="text-white">{SQUAD_ROLES.bowl} {ROLE_LABEL.bowl}s</strong>, and{" "}
-                    <strong className="text-white">{SQUAD_ROLES.wk} {ROLE_LABEL.wk}</strong> ({SQUAD_SIZE} players total, dynamic cap in Draft). The draft pool shows each player&apos;s role; you cannot add another player
-                    once that role slot is full. Only a <strong className="text-white">WK-listed</strong> player can receive the WK button — your designated keeper must be that player.
+                    <strong className="text-white">{SQUAD_ROLES.wk} {ROLE_LABEL.wk}</strong> ({SQUAD_SIZE} players total).
+                    {PROVISIONAL_SQUAD_SHAPE ? (
+                      <> Wrong shape does <strong className="text-white">not</strong> block save or scoring — you can continue with your current picks.</>
+                    ) : (
+                      <> The draft pool shows each player&apos;s role; you cannot add another player once that role slot is full.</>
+                    )}{" "}
+                    Only a <strong className="text-white">WK-listed</strong> player can receive the WK button — your designated keeper must be that player.
                   </p>
                   <p className="text-sm text-zinc-400">
                     Admins set or correct roles under <strong className="text-white">Admin → Player stats</strong>. New players default to batter until changed.
@@ -296,7 +304,9 @@ export default function RulesPage() {
               <div className="grid gap-3">
                 <Card>
                   <div className="mb-6 rounded-xl bg-white/[0.04] px-4 py-3.5 ring-1 ring-white/10">
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Squad shape (enforced in the app)</div>
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                      Squad shape ({PROVISIONAL_SQUAD_SHAPE ? "recommended — provisional" : "enforced in the app"})
+                    </div>
                     <p className="mt-2 text-sm leading-relaxed text-zinc-200">
                       <strong className="text-white">{SQUAD_ROLES.bat}</strong> batters ·{" "}
                       <strong className="text-white">{SQUAD_ROLES.ar}</strong> all-rounders ·{" "}

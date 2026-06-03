@@ -18,6 +18,9 @@ export const DYNAMIC_BUDGET_MAX = 100;
 /** Squads are rolled back to this completed GW if changed after dynamic pricing went live. */
 export const PRE_DYNAMIC_PRICING_SNAPSHOT_GW = 4;
 
+/** Recommended 2-2-2-1 — wrong shape does not block save or scoring (provisional). */
+export const PROVISIONAL_SQUAD_SHAPE = true;
+
 /** Lineup lock in the user’s browser local time (`Date.getDay()` scale: 0 Sun … 6 Sat). */
 export const LINEUP_LOCK_WEEKDAY = 6;
 export const LINEUP_LOCK_HOUR = 0;

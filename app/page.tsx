@@ -95,6 +95,7 @@ import {
   buildPurchasePricesAfterSave,
   draftPurchasePricesForSelection,
   priceForIdFromMap,
+  isGrandfatheredPricingTeam,
   purchasePricesForRestoredSnapshot,
   squadSpend,
   squadSpendForTeam,
@@ -1196,8 +1197,9 @@ function validateTeam(args: {
   viceCaptain: number | null; keeper: number | null; byId: Map<number, Player>;
   budget: number;
   priceForPlayerId: (id: number) => number;
+  skipBudgetCheck?: boolean;
 }) {
-  const { teamName, selected, captain, viceCaptain, keeper, byId, budget, priceForPlayerId } = args;
+  const { teamName, selected, captain, viceCaptain, keeper, byId, budget, priceForPlayerId, skipBudgetCheck } = args;
   const set = new Set(selected);
   const sel = selected.map((id) => byId.get(id)).filter(Boolean) as Player[];
   const spend = selected.reduce((s, id) => s + priceForPlayerId(id), 0);
@@ -1215,7 +1217,6 @@ function validateTeam(args: {
     allAvailable: sel.every((p) => p.available),
     composition: compositionOk,
   };
-  const ok = Object.values(checks).every(Boolean);
   const problems: string[] = [];
   if (!checks.teamName) problems.push("Enter a team name.");
   if (!checks.count) problems.push(`Pick exactly ${SQUAD_SIZE} players.`);
@@ -1241,6 +1242,12 @@ function validateTeam(args: {
     );
   }
   if (!checks.allAvailable) problems.push("Remove unavailable players from your squad.");
+  if (skipBudgetCheck) {
+    checks.withinBudget = true;
+    const idx = problems.findIndex((p) => p.startsWith("Stay within budget"));
+    if (idx !== -1) problems.splice(idx, 1);
+  }
+  const ok = Object.values(checks).every(Boolean);
   return { ok, checks, spend, problems };
 }
 
@@ -1288,12 +1295,13 @@ function evaluateSavedTeamHealth(
 
     const listedPriceForId = (id: number) => byId.get(id)?.basePrice ?? byId.get(id)?.price;
     const marketPriceForId = (id: number) => byId.get(id)?.price ?? 0;
-    const spend = squadSpendForTeam(team, listedPriceForId, marketPriceForId);
-    const overBy = Math.max(0, spend - budget);
-    const budgetStatus = { spend, overBudget: overBy > 0, overBy };
-    if (budgetStatus.overBudget) {
-      labels.push(`Over budget ${money(budgetStatus.overBy)}`);
-      severity = Math.max(severity, 85);
+    if (!isGrandfatheredPricingTeam(team)) {
+      const spend = squadSpend(team.players, {}, marketPriceForId);
+      const overBy = Math.max(0, spend - budget);
+      if (overBy > 0) {
+        labels.push(`Over budget ${money(overBy)}`);
+        severity = Math.max(severity, 85);
+      }
     }
 
     if (team.captain === null || !team.players.includes(team.captain)) {
@@ -2921,12 +2929,14 @@ export default function Page() {
         byId: playersById,
         budget: squadBudget,
         priceForPlayerId: (id) => priceForIdFromMap(id, draftPurchasePrices, marketPriceForId),
+        skipBudgetCheck: mySavedTeam ? isGrandfatheredPricingTeam(mySavedTeam) : false,
       }),
-    [builder, playersById, squadBudget, draftPurchasePrices, marketPriceForId],
+    [builder, playersById, squadBudget, draftPurchasePrices, marketPriceForId, mySavedTeam],
   );
 
   const mySavedTeamBudgetIssue = useMemo(() => {
     if (!mySavedTeam || mySavedTeam.players.length !== SQUAD_SIZE) return null;
+    if (isGrandfatheredPricingTeam(mySavedTeam)) return null;
     const teamSpend = squadSpendForTeam(mySavedTeam, listedPriceForId, marketPriceForId);
     const overBy = Math.max(0, teamSpend - squadBudget);
     if (overBy <= 0) return null;
@@ -4418,7 +4428,11 @@ export default function Page() {
               <section className="order-2 lg:order-1 lg:col-span-7">
                 <Card>
                   <CardHeader title="Draft pool"
-                    subtitle={`Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — cap ${money(squadBudget)} (cheapest legal 2-2-2-1 ${dynamicBudget.floorCost != null ? money(dynamicBudget.floorCost) : "—"} + ${money(dynamicBudget.headroom)}). Pool prices £${POOL_PRICE_BAND.min}–£${POOL_PRICE_BAND.max} for new transfers; original picks keep their opening price.`}
+                    subtitle={
+                      mySavedTeam && isGrandfatheredPricingTeam(mySavedTeam)
+                        ? `Squad shape: ${SQUAD_ROLES.bat}-${SQUAD_ROLES.ar}-${SQUAD_ROLES.bowl}-${SQUAD_ROLES.wk} — original season squad: your opening purchase prices apply; new transfers in Draft use current market (£${POOL_PRICE_BAND.min}–£${POOL_PRICE_BAND.max}).`
+                        : `Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — cap ${money(squadBudget)} at current market prices (£${POOL_PRICE_BAND.min}–£${POOL_PRICE_BAND.max}). New teams must fit the full dynamic rules.`
+                    }
                     right={
                       <div className="flex max-w-[16rem] flex-col items-end gap-2 sm:max-w-none">
                         <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
@@ -4904,7 +4918,7 @@ export default function Page() {
                             {teamsNeedingFix.length} team{teamsNeedingFix.length === 1 ? "" : "s"} need to fix their squad
                           </div>
                           <p className="mt-1 leading-relaxed text-amber-100/90">
-                            Over budget, incomplete, or inactive squads are flagged below and sorted to the bottom. League points already scored are kept — managers just need to open Draft and save a valid squad.
+                            New teams (joined after GW{PRE_DYNAMIC_PRICING_SNAPSHOT_GW}) must fit the dynamic cap at market prices. Original season squads keep opening purchase prices and are not flagged for budget. Incomplete or inactive squads are still flagged below.
                           </p>
                           <div className="mt-2 flex flex-wrap gap-1.5">
                             {teamsNeedingFix.map((row) => (
@@ -4964,6 +4978,9 @@ export default function Page() {
                                 ) : null}
                                 {leaderboardGwView === "live" && row.health && !row.health.ok ? (
                                   <Pill tone="amber">Fix squad</Pill>
+                                ) : null}
+                                {leaderboardGwView === "live" && row.health?.ok && isGrandfatheredPricingTeam(row.team) ? (
+                                  <Pill tone="neutral">Original squad</Pill>
                                 ) : null}
                                 <RankMovementPill
                                   overallRank={movement.overallRank}

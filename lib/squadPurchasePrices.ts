@@ -1,4 +1,5 @@
 import { POOL_PRICE_BAND } from "@/lib/dynamicPricing";
+import { PRE_DYNAMIC_PRICING_SNAPSHOT_GW } from "@/lib/leagueConfig";
 
 /** Opening listed prices at season start (matches seeded roster in the app). */
 export const INITIAL_LISTED_PRICES: Readonly<Record<number, number>> = {
@@ -45,7 +46,15 @@ export type TeamPurchaseContext = {
   players: number[];
   playerPurchasePrices?: PurchasePriceMap;
   playerJoinedGameweek?: Record<string, number>;
+  firstSaveGameweek?: number;
 };
+
+/** Season managers through GW4 keep opening purchase prices; later joiners use full dynamic pricing. */
+export function isGrandfatheredPricingTeam(team: { firstSaveGameweek?: number }): boolean {
+  const fsg = team.firstSaveGameweek;
+  if (typeof fsg !== "number" || !Number.isFinite(fsg)) return true;
+  return Math.floor(fsg) <= PRE_DYNAMIC_PRICING_SNAPSHOT_GW;
+}
 
 export function parsePurchasePriceMap(raw: unknown): PurchasePriceMap {
   if (!raw || typeof raw !== "object") return {};
@@ -115,6 +124,9 @@ export function squadSpendForTeam(
   listedPriceForId: (id: number) => number | undefined,
   marketPriceForId: (id: number) => number,
 ): number {
+  if (!isGrandfatheredPricingTeam(team)) {
+    return squadSpend(team.players, {}, marketPriceForId);
+  }
   const prices = resolveTeamPurchasePrices(team, listedPriceForId, marketPriceForId);
   return squadSpend(team.players, prices, marketPriceForId);
 }
@@ -126,13 +138,15 @@ export function draftPurchasePricesForSelection(
   marketPriceForId: (id: number) => number,
   listedPriceForId: (id: number) => number | undefined,
 ): PurchasePriceMap {
-  const savedPrices = savedTeam
-    ? resolveTeamPurchasePrices(savedTeam, listedPriceForId, marketPriceForId)
-    : {};
   const map: PurchasePriceMap = {};
+  const grandfathered = savedTeam ? isGrandfatheredPricingTeam(savedTeam) : false;
+  const savedPrices =
+    savedTeam && grandfathered
+      ? resolveTeamPurchasePrices(savedTeam, listedPriceForId, marketPriceForId)
+      : {};
   for (const id of selected) {
     const key = String(id);
-    if (savedTeam?.players.includes(id) && savedPrices[key] != null) {
+    if (grandfathered && savedTeam?.players.includes(id) && savedPrices[key] != null) {
       map[key] = savedPrices[key]!;
     } else {
       map[key] = marketPriceForId(id);

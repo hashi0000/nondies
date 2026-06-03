@@ -11,6 +11,7 @@ import {
   LINEUP_LOCK_SUMMARY_SHORT,
   MAX_BANKED_FREE_TRANSFERS,
   POINTS_PER_EXTRA_TRANSFER,
+  PRE_DYNAMIC_PRICING_SNAPSHOT_GW,
   ROLE_LABEL,
   SQUAD_ROLES,
   SQUAD_SIZE,
@@ -433,9 +434,17 @@ export default function RulesPage() {
                     <strong className="text-white">ends</strong>.
                   </p>
                   <p className="mt-3 text-sm leading-relaxed text-zinc-300">
-                    Your <strong className="text-white">budget spend</strong> uses what you actually paid:{" "}
-                    <strong className="text-white">original season picks keep their opening listed price</strong>; anyone you transfer in later costs their current market price at the time of the transfer.
+                    Your <strong className="text-white">budget spend</strong> depends on when you joined:
                   </p>
+                  <ul className="mt-2 grid gap-2 text-sm text-zinc-300 list-disc pl-4">
+                    <li>
+                      <strong className="text-white">Original season squads</strong> (saved by end of GW{PRE_DYNAMIC_PRICING_SNAPSHOT_GW}): keep{" "}
+                      <strong className="text-white">opening purchase prices</strong> for those picks. New transfers in still cost current market price. Budget cap is not enforced against rising market prices on your original seven.
+                    </li>
+                    <li>
+                      <strong className="text-white">New teams</strong> (first saved GW{PRE_DYNAMIC_PRICING_SNAPSHOT_GW + 1} or later): full dynamic rules — every pick at current market price and must fit the squad cap.
+                    </li>
+                  </ul>
                 </Card>
 
                 <Card>
@@ -478,7 +487,8 @@ export default function RulesPage() {
                   <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-3">Over budget?</div>
                   <ul className="grid gap-2 text-sm text-zinc-300 list-disc pl-4">
                     <li>
-                      If your <strong className="text-white">saved squad</strong> costs more than the cap, the app shows a warning and blocks save until you fix it in Draft.
+                      If your <strong className="text-white">saved squad</strong> costs more than the cap, the app shows a warning and blocks save until you fix it in Draft —{" "}
+                      <strong className="text-white">new teams only</strong>. Original season squads are exempt from budget enforcement on opening prices.
                     </li>
                     <li>
                       Swap players for cheaper same-role picks, or drop an expensive star for a value option — you still need{" "}

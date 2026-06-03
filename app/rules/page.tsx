@@ -439,10 +439,10 @@ export default function RulesPage() {
                   <ul className="mt-2 grid gap-2 text-sm text-zinc-300 list-disc pl-4">
                     <li>
                       <strong className="text-white">Original season squads</strong> (saved by end of GW{PRE_DYNAMIC_PRICING_SNAPSHOT_GW}): keep{" "}
-                      <strong className="text-white">opening purchase prices</strong> for those picks. New transfers in still cost current market price. Budget cap is not enforced against rising market prices on your original seven.
+                      <strong className="text-white">opening purchase prices</strong> for those picks. New transfers in still cost current market price. Wrong shape or incomplete squads still score from the players saved — no forced rebuild.
                     </li>
                     <li>
-                      <strong className="text-white">New teams</strong> (first saved GW{PRE_DYNAMIC_PRICING_SNAPSHOT_GW + 1} or later): full dynamic rules — every pick at current market price and must fit the squad cap.
+                      <strong className="text-white">New teams</strong> (first saved GW{PRE_DYNAMIC_PRICING_SNAPSHOT_GW + 1} or later): full dynamic rules — valid 2-2-2-1 shape, C/VC/WK, and must fit the squad cap at market prices.
                     </li>
                   </ul>
                 </Card>

@@ -1197,9 +1197,10 @@ function validateTeam(args: {
   viceCaptain: number | null; keeper: number | null; byId: Map<number, Player>;
   budget: number;
   priceForPlayerId: (id: number) => number;
-  skipBudgetCheck?: boolean;
+  /** Original season squads — keep scoring; no forced shape/budget/C/VC/WK fixes. */
+  grandfatheredRelaxed?: boolean;
 }) {
-  const { teamName, selected, captain, viceCaptain, keeper, byId, budget, priceForPlayerId, skipBudgetCheck } = args;
+  const { teamName, selected, captain, viceCaptain, keeper, byId, budget, priceForPlayerId, grandfatheredRelaxed } = args;
   const set = new Set(selected);
   const sel = selected.map((id) => byId.get(id)).filter(Boolean) as Player[];
   const spend = selected.reduce((s, id) => s + priceForPlayerId(id), 0);
@@ -1242,10 +1243,21 @@ function validateTeam(args: {
     );
   }
   if (!checks.allAvailable) problems.push("Remove unavailable players from your squad.");
-  if (skipBudgetCheck) {
-    checks.withinBudget = true;
-    const idx = problems.findIndex((p) => p.startsWith("Stay within budget"));
-    if (idx !== -1) problems.splice(idx, 1);
+  if (grandfatheredRelaxed) {
+    if (selected.length === 0) {
+      problems.push("Pick at least one player to save.");
+    } else {
+      problems.length = 0;
+      if (!checks.teamName) problems.push("Enter a team name.");
+      checks.count = true;
+      checks.composition = true;
+      checks.captain = true;
+      checks.viceCaptain = true;
+      checks.keeper = true;
+      checks.withinBudget = true;
+      checks.uniqueLeadership = true;
+      checks.allAvailable = true;
+    }
   }
   const ok = Object.values(checks).every(Boolean);
   return { ok, checks, spend, problems };
@@ -1273,6 +1285,13 @@ function evaluateSavedTeamHealth(
   byId: Map<number, Player>,
   budget: number,
 ): SavedTeamHealth {
+  if (isGrandfatheredPricingTeam(team)) {
+    if (team.players.length === 0 && (team.cumulativePoints ?? 0) === 0) {
+      return { ok: false, severity: 100, labels: ["No squad saved"] };
+    }
+    return { ok: true, severity: 0, labels: [] };
+  }
+
   const labels: string[] = [];
   let severity = 0;
   const n = team.players.length;
@@ -2929,7 +2948,7 @@ export default function Page() {
         byId: playersById,
         budget: squadBudget,
         priceForPlayerId: (id) => priceForIdFromMap(id, draftPurchasePrices, marketPriceForId),
-        skipBudgetCheck: mySavedTeam ? isGrandfatheredPricingTeam(mySavedTeam) : false,
+        grandfatheredRelaxed: mySavedTeam ? isGrandfatheredPricingTeam(mySavedTeam) : false,
       }),
     [builder, playersById, squadBudget, draftPurchasePrices, marketPriceForId, mySavedTeam],
   );
@@ -4918,7 +4937,7 @@ export default function Page() {
                             {teamsNeedingFix.length} team{teamsNeedingFix.length === 1 ? "" : "s"} need to fix their squad
                           </div>
                           <p className="mt-1 leading-relaxed text-amber-100/90">
-                            New teams (joined after GW{PRE_DYNAMIC_PRICING_SNAPSHOT_GW}) must fit the dynamic cap at market prices. Original season squads keep opening purchase prices and are not flagged for budget. Incomplete or inactive squads are still flagged below.
+                            New teams must fit the dynamic cap and valid 2-2-2-1 shape. Original season squads keep scoring as saved (even wrong shape) and are not flagged below.
                           </p>
                           <div className="mt-2 flex flex-wrap gap-1.5">
                             {teamsNeedingFix.map((row) => (

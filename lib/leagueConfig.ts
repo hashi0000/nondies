@@ -9,10 +9,11 @@ export const SQUAD_SIZE = 7;
 export const BUDGET = 64;
 export const BUDGET_BASE = BUDGET;
 
-/** £ above the cheapest legal 2-2-2-1 — room for a couple of premiums vs an all-value squad. */
-export const DYNAMIC_BUDGET_HEADROOM = 20;
-export const DYNAMIC_BUDGET_MIN = 60;
-export const DYNAMIC_BUDGET_MAX = 85;
+/** £ above the cheapest legal 2-2-2-1 — generous room so a mixed squad (not all floor picks) still fits. */
+export const DYNAMIC_BUDGET_HEADROOM = 32;
+/** Floor on the cap even when the market is cheap — avoids tight squads mid-season. */
+export const DYNAMIC_BUDGET_MIN = 75;
+export const DYNAMIC_BUDGET_MAX = 100;
 
 /** Lineup lock in the user’s browser local time (`Date.getDay()` scale: 0 Sun … 6 Sat). */
 export const LINEUP_LOCK_WEEKDAY = 6;

@@ -253,7 +253,7 @@ export default function RulesPage() {
                     <li>
                       <strong className="text-white">Dynamic prices:</strong> once a player has gameweek history, their draft price is set from{" "}
                       <strong className="text-white">performance rank in the whole pool</strong> (60% season pts-per-game + 40% last 3 played weeks; DNP weeks ignored).
-                      Draft prices run from <strong className="text-white">£{POOL_PRICE_BAND.min}–£{POOL_PRICE_BAND.max}</strong> — top form ≈ £{POOL_PRICE_BAND.max}, coldest ≈ £{POOL_PRICE_BAND.min}.
+                      Draft prices run from <strong className="text-white">£{POOL_PRICE_BAND.min}–£{POOL_PRICE_BAND.max}</strong> — top form ≈ £{POOL_PRICE_BAND.max}, most of the pool sits around £10–£12, coldest ≈ £{POOL_PRICE_BAND.min}.
                       <strong className="text-white"> 1st XI / 2nd XI</strong> tags are for squad filters only; a hot 2nd XI player can cost as much as anyone.
                       When the admin <strong className="text-white">ends a gameweek</strong>, listed prices are saved at the new draft level. The squad cap rises or falls with the market. The app does{" "}
                       <strong className="text-white">not</strong> track purchase price — only the current cap when saving.

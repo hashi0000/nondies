@@ -202,13 +202,20 @@ export function formScoreForPlayer(p: PlayerForPricing): number {
   return Math.round((seasonPpg * SEASON_PPG_WEIGHT + recentPpg * RECENT_PPG_WEIGHT) * 10) / 10;
 }
 
-/** Map rank (0 = best) to a draft price on the £5–£20 ladder. */
+/** Map rank (0 = best) to a draft price on the £5–£20 ladder (most players cluster around £11). */
 export function targetPriceFromValueRank(rankIndex: number, poolSize: number): number {
   if (poolSize <= 0) return POOL_PRICE_BAND.min;
   if (poolSize === 1) return POOL_PRICE_BAND.max;
   const pct = rankIndex / (poolSize - 1);
-  const raw = POOL_PRICE_BAND.max - pct * (POOL_PRICE_BAND.max - POOL_PRICE_BAND.min);
-  return clampPoolPrice(raw);
+  const mid = 11;
+  const spreadTop = POOL_PRICE_BAND.max - mid;
+  const spreadBot = mid - POOL_PRICE_BAND.min;
+  if (pct <= 0.5) {
+    const t = 1 - pct / 0.5;
+    return clampPoolPrice(mid + spreadTop * t * t);
+  }
+  const t = (pct - 0.5) / 0.5;
+  return clampPoolPrice(mid - spreadBot * t * t);
 }
 
 function pricingEligible(p: PlayerForPricing): boolean {

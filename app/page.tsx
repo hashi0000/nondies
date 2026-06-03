@@ -62,8 +62,10 @@ import {
 import {
   countOutgoingPlayerChanges,
   freeTransfersAfterRollover,
+  isFreeSquadRebuildGameweek,
   MAX_FREE_TRANSFERS_IN_GW,
   penaltyPointsForExtras,
+  pricingAmnestyPavilionMessage,
   transferExtrasAgainstFree,
 } from "@/lib/transfers";
 import { normalizePlayCricketName } from "@/lib/playCricket/names";
@@ -557,6 +559,36 @@ function SquadOverBudgetBanner({
   );
 }
 
+function FreeSquadRebuildBanner({
+  gameweek,
+  locked,
+  onOpenDraft,
+}: {
+  gameweek: number;
+  locked: boolean;
+  onOpenDraft: () => void;
+}) {
+  return (
+    <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3.5 text-sm text-emerald-100 ring-1 ring-emerald-500/30">
+      <div className="font-semibold text-emerald-50">Free squad rebuild · GW{gameweek}</div>
+      <p className="mt-1.5 leading-relaxed text-emerald-100/90">
+        Player prices and the squad cap have changed. Change your full 7 in Draft{" "}
+        {locked ? "after the next unlock" : `until ${LINEUP_LOCK_SUMMARY}`} with{" "}
+        <strong className="text-white">no transfer penalties</strong>. You still need to fit the new budget cap before saving.
+      </p>
+      {!locked ? (
+        <button
+          type="button"
+          onClick={onOpenDraft}
+          className="mt-3 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white ring-1 ring-emerald-500/50 hover:bg-emerald-500"
+        >
+          Open Draft
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function PriceWithForm({
   price,
   basePrice,
@@ -936,7 +968,13 @@ function transferPenaltiesApplyInGameweek(currentGameweek: number): boolean {
 }
 
 /** True when saves should apply transfer limits and point hits (vs GW1 or new-joiner grace before lock). */
-function transferPenaltiesApplyForTeam(currentGameweek: number, existing: SavedTeam | null, now: Date): boolean {
+function transferPenaltiesApplyForTeam(
+  currentGameweek: number,
+  existing: SavedTeam | null,
+  now: Date,
+  freeSquadRebuildGameweek?: number | null,
+): boolean {
+  if (isFreeSquadRebuildGameweek(currentGameweek, freeSquadRebuildGameweek)) return false;
   if (!transferPenaltiesApplyInGameweek(currentGameweek)) return false;
   if (!existing) return false;
   const fsg = existing.firstSaveGameweek;
@@ -1235,7 +1273,7 @@ function TransferImpactPanel({
   selectedCount: number;
   freeAtLock: number | null;
   preview: ReturnType<typeof buildTransferSavePreview>;
-  rules: { gw1Open: boolean; newJoinGrace: boolean };
+  rules: { gw1Open: boolean; newJoinGrace: boolean; pricingAmnesty: boolean };
   locked: boolean;
 }) {
   if (locked) {
@@ -1285,7 +1323,12 @@ function TransferImpactPanel({
           Unlimited changes · GW{currentGameweek}
         </div>
         <p className="mt-2 text-sm text-emerald-100/90">
-          {rules.gw1Open ? (
+          {rules.pricingAmnesty ? (
+            <>
+              Pricing update — rebuild your squad freely until <strong className="text-white">{LINEUP_LOCK_SUMMARY}</strong> with{" "}
+              <strong className="text-white">no transfer penalties</strong>.
+            </>
+          ) : rules.gw1Open ? (
             <>Opening gameweek — change players freely until lineup lock with <strong className="text-white">no transfer penalties</strong>.</>
           ) : (
             <>New this gameweek — unlimited player changes until <strong className="text-white">{LINEUP_LOCK_SUMMARY}</strong>.</>
@@ -1406,9 +1449,15 @@ function buildTransferSavePreview(
   currentGameweek: number,
   playersById: Map<number, Player>,
   now: Date,
+  freeSquadRebuildGameweek?: number | null,
 ) {
   if (selected.length !== SQUAD_SIZE) return null;
-  const penaltiesApply = transferPenaltiesApplyForTeam(currentGameweek, mySavedTeam ?? null, now);
+  const penaltiesApply = transferPenaltiesApplyForTeam(
+    currentGameweek,
+    mySavedTeam ?? null,
+    now,
+    freeSquadRebuildGameweek,
+  );
   if (!mySavedTeam) {
     return { kind: "first" as const, penaltiesApply };
   }
@@ -1959,6 +2008,8 @@ export default function Page() {
   const [teams, setTeams] = useState<SavedTeam[]>([]);
   const [currentGameweek, setCurrentGameweek] = useState(1);
   const [dnpHistoryRepairDone, setDnpHistoryRepairDone] = useState(false);
+  const [freeSquadRebuildGameweek, setFreeSquadRebuildGameweek] = useState<number | null>(null);
+  const [pricingAmnestyBusy, setPricingAmnestyBusy] = useState(false);
   const [dnpRepairNote, setDnpRepairNote] = useState<string | null>(null);
   const pendingDnpHistoryRepairRef = useRef(false);
   const [fsReady, setFsReady] = useState(false);
@@ -2069,9 +2120,14 @@ export default function Page() {
         const data = snap.data();
         setCurrentGameweek(data.currentGameweek ?? 1);
         setDnpHistoryRepairDone(Boolean(data.dnpHistoryRepairDone));
+        const fsr = data.freeSquadRebuildGameweek;
+        setFreeSquadRebuildGameweek(
+          typeof fsr === "number" && Number.isFinite(fsr) ? Math.floor(fsr) : null,
+        );
       } else {
         setCurrentGameweek(1);
         setDnpHistoryRepairDone(false);
+        setFreeSquadRebuildGameweek(null);
       }
       setFsReady(true);
       setFsError(null);
@@ -2707,18 +2763,32 @@ export default function Page() {
     setOwnerNameInput(fromTeam ?? accountHolderName(authUser));
   }, [authUser, mySavedTeam, ownerNameTouched]);
 
+  const pricingAmnestyActive = isFreeSquadRebuildGameweek(currentGameweek, freeSquadRebuildGameweek);
+
   const transferSavePreview = useMemo(() => {
     void lockClock;
-    return buildTransferSavePreview(mySavedTeam ?? null, builder.selected, currentGameweek, playersById, new Date());
-  }, [mySavedTeam, builder.selected, currentGameweek, playersById, lockClock]);
+    return buildTransferSavePreview(
+      mySavedTeam ?? null,
+      builder.selected,
+      currentGameweek,
+      playersById,
+      new Date(),
+      freeSquadRebuildGameweek,
+    );
+  }, [mySavedTeam, builder.selected, currentGameweek, playersById, lockClock, freeSquadRebuildGameweek]);
 
   const transferBaselineSet = useMemo(() => {
     if (!mySavedTeam || builder.selected.length !== SQUAD_SIZE) return null;
     void lockClock;
     const now = new Date();
-    const penaltiesApply = transferPenaltiesApplyForTeam(currentGameweek, mySavedTeam, now);
+    const penaltiesApply = transferPenaltiesApplyForTeam(
+      currentGameweek,
+      mySavedTeam,
+      now,
+      freeSquadRebuildGameweek,
+    );
     return new Set(squadTransferBaseline(mySavedTeam, penaltiesApply, currentGameweek));
-  }, [mySavedTeam, builder.selected, currentGameweek, lockClock]);
+  }, [mySavedTeam, builder.selected, currentGameweek, lockClock, freeSquadRebuildGameweek]);
 
   const saveTeamButtonLabel = useMemo(() => {
     if (savingTeam) return "Saving…";
@@ -2742,9 +2812,10 @@ export default function Page() {
     const newJoinGrace =
       !!mySavedTeam &&
       transferPenaltiesApplyInGameweek(currentGameweek) &&
-      !transferPenaltiesApplyForTeam(currentGameweek, mySavedTeam, now);
-    return { gw1Open, newJoinGrace };
-  }, [currentGameweek, mySavedTeam, lockClock]);
+      !transferPenaltiesApplyForTeam(currentGameweek, mySavedTeam, now, freeSquadRebuildGameweek) &&
+      !pricingAmnestyActive;
+    return { gw1Open, newJoinGrace, pricingAmnesty: pricingAmnestyActive };
+  }, [currentGameweek, mySavedTeam, lockClock, freeSquadRebuildGameweek, pricingAmnestyActive]);
 
   /** Free transfers you had when this gameweek opened (from saved team). */
   const freeTransfersAtLock = useMemo(() => {
@@ -2912,7 +2983,12 @@ export default function Page() {
         const nowSave = new Date();
         const playerJoinedGameweek = buildPlayerJoinedGameweekAfterSave(existing, newPlayers, currentGameweek, nowSave);
 
-        const penaltiesApply = transferPenaltiesApplyForTeam(currentGameweek, existing, nowSave);
+        const penaltiesApply = transferPenaltiesApplyForTeam(
+          currentGameweek,
+          existing,
+          nowSave,
+          freeSquadRebuildGameweek,
+        );
 
         let baseline: number[];
         let freeAtGwStart: number;
@@ -2983,6 +3059,40 @@ export default function Page() {
   }
 
   function adminLogout() { setAdminAuthed(false); }
+
+  async function enablePricingAmnestyAndNotify() {
+    if (!authUser) return;
+    if (
+      !window.confirm(
+        `Enable a free full squad rebuild for GW${currentGameweek} (no transfer penalties until lineup lock) and post a notice to the Pavilion for all managers?`,
+      )
+    ) {
+      return;
+    }
+    setPricingAmnestyBusy(true);
+    try {
+      await runAction("Pricing amnesty", async () => {
+        await assertLeagueAdminFirestoreAccess(authUser);
+        await setDoc(
+          doc(db, "gameState", "current"),
+          { freeSquadRebuildGameweek: currentGameweek },
+          { merge: true },
+        );
+        await addDoc(collection(db, "chatMessages"), {
+          userId: authUser.uid,
+          displayName: accountHolderName(authUser),
+          message: pricingAmnestyPavilionMessage(currentGameweek, LINEUP_LOCK_SUMMARY),
+          createdAt: serverTimestamp(),
+          mentionedUserIds: [],
+          deleted: false,
+          isAdmin: true,
+        });
+      });
+      setFreeSquadRebuildGameweek(currentGameweek);
+    } finally {
+      setPricingAmnestyBusy(false);
+    }
+  }
 
   async function runAdminAccessProbe() {
     if (!authUser) return;
@@ -3616,7 +3726,7 @@ export default function Page() {
           );
         }
         try {
-          await setDoc(doc(db, "gameState", "current"), { currentGameweek: gw + 1 }, { merge: true });
+          await setDoc(doc(db, "gameState", "current"), { currentGameweek: gw + 1, freeSquadRebuildGameweek: deleteField() }, { merge: true });
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : String(e);
           throw new Error(`gameState write — ${msg}`);
@@ -3961,6 +4071,16 @@ export default function Page() {
               spend={mySavedTeamBudgetIssue.spend}
               overBy={mySavedTeamBudgetIssue.overBy}
               budget={squadBudget}
+              locked={locked}
+              onOpenDraft={() => setTab("draft")}
+            />
+          </div>
+        ) : null}
+
+        {pricingAmnestyActive ? (
+          <div className={mySavedTeamBudgetIssue ? "mt-3" : "mt-4"}>
+            <FreeSquadRebuildBanner
+              gameweek={currentGameweek}
               locked={locked}
               onOpenDraft={() => setTab("draft")}
             />
@@ -4750,6 +4870,29 @@ export default function Page() {
                         <strong className="text-zinc-300">{MAX_FREE_TRANSFERS_IN_GW}</strong> free in hand, then{" "}
                         <strong className="text-zinc-300">−{POINTS_PER_EXTRA_TRANSFER}</strong> league points per extra change. Tunables in{" "}
                         <code className="rounded bg-black/30 px-1 font-mono text-[11px] text-zinc-300">lib/leagueConfig.ts</code>.
+                      </div>
+
+                      <div className="rounded-2xl border border-emerald-500/35 bg-emerald-500/10 px-4 py-3.5 text-sm text-emerald-100 ring-1 ring-emerald-500/25">
+                        <div className="font-semibold text-emerald-50">Pricing update · free squad rebuild</div>
+                        <p className="mt-1.5 leading-relaxed text-emerald-100/90">
+                          Lets every manager change their full 7 this gameweek with no transfer penalties (until lineup lock) and posts the notice to the{" "}
+                          <strong className="text-white">Pavilion</strong>. Budget cap still applies — squads over cap must be fixed before save.
+                        </p>
+                        {pricingAmnestyActive ? (
+                          <p className="mt-2 text-xs font-medium text-emerald-200">Active for GW{currentGameweek}.</p>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => void enablePricingAmnestyAndNotify()}
+                          disabled={pricingAmnestyBusy}
+                          className="mt-3 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white ring-1 ring-emerald-500/50 hover:bg-emerald-500 disabled:opacity-50"
+                        >
+                          {pricingAmnestyBusy
+                            ? "Working…"
+                            : pricingAmnestyActive
+                              ? "Post Pavilion notice again"
+                              : `Enable free rebuild GW${currentGameweek} + notify`}
+                        </button>
                       </div>
 
                       {/* Action buttons */}

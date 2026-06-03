@@ -35,3 +35,23 @@ export function freeTransfersAfterRollover(unusedFreesFromPriorGw: number): numb
   const unused = Math.max(0, unusedFreesFromPriorGw);
   return Math.min(unused + FREE_TRANSFERS_PER_WEEK, MAX_FREE_TRANSFERS_IN_GW);
 }
+
+/** League-wide amnesty: unlimited player changes for one gameweek (stored on gameState/current). */
+export function isFreeSquadRebuildGameweek(
+  currentGameweek: number,
+  freeSquadRebuildGameweek?: number | null,
+): boolean {
+  return (
+    typeof freeSquadRebuildGameweek === "number" &&
+    Number.isFinite(freeSquadRebuildGameweek) &&
+    Math.floor(freeSquadRebuildGameweek) === currentGameweek
+  );
+}
+
+export function pricingAmnestyPavilionMessage(gameweek: number, lineupLockSummary: string): string {
+  return (
+    `📢 GW${gameweek} — free squad rebuild (new pricing)\n\n` +
+    `Player prices and the squad cap have changed. Rebuild your 7 in Draft until ${lineupLockSummary} with ` +
+    `no transfer penalties. Fix any over-budget squad before saving.`
+  );
+}

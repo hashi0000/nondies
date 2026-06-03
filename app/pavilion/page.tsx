@@ -172,6 +172,7 @@ export default function PavilionPage() {
         displayName,
         displayNameLower: displayName.toLowerCase(),
         email: authUser.email ?? null,
+        lastLoginAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       },
       { merge: true },

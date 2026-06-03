@@ -18,6 +18,7 @@ import {
   Trophy,
   Download,
   ArrowUpDown,
+  AlertTriangle,
   MessageSquare,
   Users,
   X,
@@ -449,7 +450,8 @@ type DraftSortKey =
   | "notOuts"
   | "average"
   | "highScore"
-  | "bestBowling";
+  | "bestBowling"
+  | "playedGws";
 
 type LatestChatMeta = {
   createdAt: Timestamp;
@@ -674,6 +676,25 @@ function formatSnapshotTime(ts: unknown) {
   } catch {
     return ts.toDate().toString();
   }
+}
+
+function formatLastLogin(ts: Timestamp | null | undefined, nowMs = Date.now()): string {
+  if (!ts) return "Never";
+  const d = ts.toDate();
+  const diffMs = Math.max(0, nowMs - d.getTime());
+  const diffMins = Math.floor(diffMs / 60_000);
+  if (diffMins < 1) return "Just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) return `${diffDays}d ago`;
+  if (diffDays < 28) return `${Math.floor(diffDays / 7)}w ago`;
+  return d.toLocaleString(undefined, {
+    day: "2-digit",
+    month: "short",
+    year: d.getFullYear() !== new Date(nowMs).getFullYear() ? "numeric" : undefined,
+  });
 }
 
 function snapshotStatDiffCount(curr: SnapshotPlayerRow[] | undefined, prev: SnapshotPlayerRow[] | undefined) {
@@ -1206,6 +1227,97 @@ function validateTeam(args: {
   }
   if (!checks.allAvailable) problems.push("Remove unavailable players from your squad.");
   return { ok, checks, spend, problems };
+}
+
+type SavedTeamHealth = {
+  ok: boolean;
+  /** Higher = more broken; used to sort inactive / incomplete squads to the bottom. */
+  severity: number;
+  labels: string[];
+};
+
+type LeaderboardRow = {
+  team: SavedTeam;
+  weekPts: number;
+  total: number;
+  capName: string;
+  vcName: string;
+  fieldingLabel: string | null;
+  health?: SavedTeamHealth;
+};
+
+function evaluateSavedTeamHealth(
+  team: SavedTeam,
+  byId: Map<number, Player>,
+  budget: number,
+): SavedTeamHealth {
+  const labels: string[] = [];
+  let severity = 0;
+  const n = team.players.length;
+
+  if (n === 0) {
+    return { ok: false, severity: 100, labels: ["No squad saved"] };
+  }
+
+  if (n !== SQUAD_SIZE) {
+    labels.push(`${n}/${SQUAD_SIZE} players`);
+    severity = Math.max(severity, 95);
+  }
+
+  if (n === SQUAD_SIZE) {
+    if (!squadCompositionOk(team.players, byId)) {
+      const c = countRolesInSelection(team.players, byId);
+      labels.push(`Wrong shape ${c.bat}-${c.ar}-${c.bowl}-${c.wk}`);
+      severity = Math.max(severity, 75);
+    }
+
+    const budgetStatus = squadBudgetStatus(team.players, budget, (id) => byId.get(id)?.price);
+    if (budgetStatus.overBudget) {
+      labels.push(`Over budget ${money(budgetStatus.overBy)}`);
+      severity = Math.max(severity, 85);
+    }
+
+    if (team.captain === null || !team.players.includes(team.captain)) {
+      labels.push("No captain");
+      severity = Math.max(severity, 65);
+    }
+    if (team.viceCaptain === null || !team.players.includes(team.viceCaptain)) {
+      labels.push("No vice-captain");
+      severity = Math.max(severity, 65);
+    }
+    const keeperPlayer = team.keeper !== null ? byId.get(team.keeper) : undefined;
+    if (team.keeper === null || !team.players.includes(team.keeper) || keeperPlayer?.role !== "wk") {
+      labels.push("No wicketkeeper");
+      severity = Math.max(severity, 65);
+    }
+
+    const unavailableCount = team.players.filter((id) => {
+      const p = byId.get(id);
+      return p && !p.available;
+    }).length;
+    if (unavailableCount > 0) {
+      labels.push(unavailableCount === 1 ? "Unavailable pick" : `${unavailableCount} unavailable`);
+      severity = Math.max(severity, 55);
+    }
+  }
+
+  const totalPts = team.cumulativePoints ?? 0;
+  if (n < SQUAD_SIZE && totalPts === 0) {
+    if (!labels.includes("No squad saved")) labels.push("Inactive");
+    severity = Math.max(severity, 98);
+  }
+
+  return { ok: labels.length === 0, severity, labels };
+}
+
+function compareLeaderboardRows(a: LeaderboardRow, b: LeaderboardRow): number {
+  const aNeedsFix = a.health && !a.health.ok ? 1 : 0;
+  const bNeedsFix = b.health && !b.health.ok ? 1 : 0;
+  if (aNeedsFix !== bNeedsFix) return aNeedsFix - bNeedsFix;
+  if (aNeedsFix && a.health && b.health && a.health.severity !== b.health.severity) {
+    return a.health.severity - b.health.severity;
+  }
+  return b.total - a.total || a.team.name.localeCompare(b.team.name);
 }
 
 // ─── UI Components ───────────────────────────────────────────────────────────
@@ -2094,6 +2206,8 @@ export default function Page() {
   /** "live" = current squads; number = completed GW from gwTeams archive. */
   const [leaderboardGwView, setLeaderboardGwView] = useState<number | "live">("live");
   const [gwTeamsArchive, setGwTeamsArchive] = useState<GwTeamsDoc[]>([]);
+  const [lastLoginByUid, setLastLoginByUid] = useState<Map<string, Timestamp>>(() => new Map());
+  const lastLoginWriteMsRef = useRef(0);
   const [undoingGameweek, setUndoingGameweek] = useState(false);
 
   useEffect(() => {
@@ -2300,6 +2414,52 @@ export default function Page() {
     });
   }, [authUser]);
 
+  useEffect(() => {
+    if (!authUser) return;
+    const q = query(collection(db, "users"), limit(500));
+    return onSnapshot(
+      q,
+      (snap) => {
+        const next = new Map<string, Timestamp>();
+        for (const d of snap.docs) {
+          const raw = d.data() as Record<string, unknown>;
+          const ts =
+            raw.lastLoginAt instanceof Timestamp
+              ? raw.lastLoginAt
+              : raw.updatedAt instanceof Timestamp
+                ? raw.updatedAt
+                : null;
+          if (ts) next.set(d.id, ts);
+        }
+        setLastLoginByUid(next);
+      },
+      (err) => {
+        setFsError((prev) => prev ?? `users: ${err?.message ?? "Failed to read user activity."}`);
+      },
+    );
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser) return;
+    const nowMs = Date.now();
+    if (nowMs - lastLoginWriteMsRef.current < 30 * 60_000) return;
+    lastLoginWriteMsRef.current = nowMs;
+    const displayName = accountHolderName(authUser);
+    void setDoc(
+      doc(db, "users", authUser.uid),
+      {
+        displayName,
+        displayNameLower: displayName.toLowerCase(),
+        email: authUser.email ?? null,
+        lastLoginAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    ).catch(() => {
+      lastLoginWriteMsRef.current = 0;
+    });
+  }, [authUser]);
+
   async function runAction<T>(label: string, fn: () => Promise<T>) {
     setActionError(null);
     try {
@@ -2449,6 +2609,11 @@ export default function Page() {
     return isSelectionLocked(new Date());
   }, [lockClock]);
 
+  const lastLoginNowMs = useMemo(() => {
+    void lockClock;
+    return Date.now();
+  }, [lockClock]);
+
   const spend = useMemo(
     () => builder.selected.reduce((s, id) => s + (playersById.get(id)?.price ?? 0), 0),
     [builder.selected, playersById]
@@ -2477,6 +2642,7 @@ export default function Page() {
   /** Players tab table (available pool only — same as before). */
   const [playersTabSortKey, setPlayersTabSortKey] = useState<DraftSortKey>("gwPoints");
   const [playersTabSortDir, setPlayersTabSortDir] = useState<"asc" | "desc">("desc");
+  const [hideInactivePlayers, setHideInactivePlayers] = useState(false);
   const togglePlayersSort = React.useCallback((key: DraftSortKey) => {
     setPlayersTabSortKey((prevKey) => {
       if (prevKey === key) {
@@ -2489,19 +2655,25 @@ export default function Page() {
   }, []);
   const playerPoints = useMemo(
     () => {
-      const rows = draftPoolPlayers
+      let rows = draftPoolPlayers
         .filter((p) => p.available)
         .map((p) => {
           const season = seasonCricketStatsFromHistory(p.history);
           const seasonFantasy = seasonFantasyBreakdownFromHistory(p.history);
+          const seasonPoints = sumSeasonPointsFromHistory(p.history);
+          const playedGws = p.history.filter((h) => !h.didNotPlay).length;
           return {
             player: p,
             season,
             seasonFantasy,
-            seasonPoints: sumSeasonPointsFromHistory(p.history),
+            seasonPoints,
+            playedGws,
             picked: ownership.get(p.id) ?? 0,
           };
         });
+      if (hideInactivePlayers) {
+        rows = rows.filter((r) => r.seasonPoints > 0 || r.playedGws > 0 || r.season.innings > 0);
+      }
       const mult = playersTabSortDir === "desc" ? -1 : 1;
       rows.sort((a, b) => {
         let cmp = 0;
@@ -2525,6 +2697,7 @@ export default function Page() {
           case "bowlPts": cmp = a.seasonFantasy.bowling - b.seasonFantasy.bowling; break;
           case "fieldPts": cmp = a.seasonFantasy.fielding - b.seasonFantasy.fielding; break;
           case "seasonPts": cmp = a.seasonPoints - b.seasonPoints; break;
+          case "playedGws": cmp = a.playedGws - b.playedGws; break;
           case "picked": cmp = a.picked - b.picked; break;
           case "innings": cmp = a.season.innings - b.season.innings; break;
           case "notOuts": cmp = a.season.notOuts - b.season.notOuts; break;
@@ -2545,7 +2718,7 @@ export default function Page() {
       });
       return rows;
     },
-    [draftPoolPlayers, playersTabSortKey, playersTabSortDir, ownership],
+    [draftPoolPlayers, playersTabSortKey, playersTabSortDir, ownership, hideInactivePlayers],
   );
 
   const filteredPlayers = useMemo(() => {
@@ -2835,22 +3008,28 @@ export default function Page() {
         capName: t.captain ? scoringPlayersById.get(t.captain)?.name ?? "—" : "—",
         vcName: t.viceCaptain ? scoringPlayersById.get(t.viceCaptain)?.name ?? "—" : "—",
         fieldingLabel: formatSquadFieldingSummary(fielding),
+        health: evaluateSavedTeamHealth(t, playersById, squadBudget),
       };
     });
-    rows.sort((a, b) => b.total - a.total || a.team.name.localeCompare(b.team.name));
+    rows.sort(compareLeaderboardRows);
     return rows;
-  }, [teams, scoringPlayersById, currentGameweek]);
+  }, [teams, scoringPlayersById, currentGameweek, playersById, squadBudget]);
+
+  const teamsNeedingFix = useMemo(
+    () => leaderboard.filter((row) => row.health && !row.health.ok),
+    [leaderboard],
+  );
 
   const completedGameweeks = useMemo(
     () => gwTeamsArchive.map((g) => g.gameweek).sort((a, b) => b - a),
     [gwTeamsArchive],
   );
 
-  const historicalLeaderboard = useMemo(() => {
+  const historicalLeaderboard = useMemo((): LeaderboardRow[] | null => {
     if (leaderboardGwView === "live") return null;
     const doc = gwTeamsArchive.find((g) => g.gameweek === leaderboardGwView);
     if (!doc) return [];
-    const rows = doc.teams.map((ts) => {
+    const rows: LeaderboardRow[] = doc.teams.map((ts) => {
       const team = gwSnapshotToSavedTeam(ts) as SavedTeam;
       const fielding = squadFieldingSummaryForGameweek(team, playersById, leaderboardGwView, false);
       return {
@@ -2866,7 +3045,7 @@ export default function Page() {
     return rows;
   }, [leaderboardGwView, gwTeamsArchive, playersById]);
 
-  const displayedLeaderboard = historicalLeaderboard ?? leaderboard;
+  const displayedLeaderboard: LeaderboardRow[] = historicalLeaderboard ?? leaderboard;
   const leaderboardViewLabel =
     leaderboardGwView === "live" ? `GW${currentGameweek} (live)` : `GW${leaderboardGwView} (archive)`;
 
@@ -4470,7 +4649,7 @@ export default function Page() {
                   title={`Leaderboard — ${leaderboardViewLabel}`}
                   subtitle={
                     leaderboardGwView === "live"
-                      ? "Total = cumulative points across completed gameweeks plus this week. View past gameweeks to see locked squads."
+                      ? "Total = cumulative points across completed gameweeks plus this week. Last login updates when managers open the app. Squads needing a fix are sorted to the bottom."
                       : "Archived squads from when this gameweek was ended. Totals include points through this week."
                   }
                 />
@@ -4561,6 +4740,35 @@ export default function Page() {
                     </p>
                   ) : null}
 
+                  {leaderboardGwView === "live" && teamsNeedingFix.length > 0 ? (
+                    <div className="mb-4 rounded-2xl border border-amber-500/40 bg-amber-500/10 px-4 py-3.5 text-sm text-amber-100 ring-1 ring-amber-500/30">
+                      <div className="flex items-start gap-2.5">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" aria-hidden />
+                        <div>
+                          <div className="font-semibold text-amber-50">
+                            {teamsNeedingFix.length} team{teamsNeedingFix.length === 1 ? "" : "s"} need to fix their squad
+                          </div>
+                          <p className="mt-1 leading-relaxed text-amber-100/90">
+                            Over budget, incomplete, or inactive squads are flagged below and sorted to the bottom. League points already scored are kept — managers just need to open Draft and save a valid squad.
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {teamsNeedingFix.map((row) => (
+                              <span
+                                key={row.team.uid}
+                                className="rounded-full bg-amber-950/50 px-2.5 py-1 text-xs font-medium text-amber-100 ring-1 ring-amber-500/25"
+                              >
+                                {row.team.name}
+                                {row.health?.labels.length ? ` · ${row.health.labels[0]}` : ""}
+                                {" · "}
+                                last login {formatLastLogin(lastLoginByUid.get(row.team.uid), lastLoginNowMs)}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
                   {displayedLeaderboard.length === 0 ? (
                     <div className="rounded-2xl bg-white/5 p-6 text-center ring-1 ring-white/10">
                       <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-red-600/15 ring-1 ring-red-500/30">
@@ -4591,12 +4799,16 @@ export default function Page() {
                         const weekRank = idx + 1;
                         return (
                         <div key={row.team.uid} className={["rounded-2xl p-4 ring-1 sm:p-5",
-                          row.team.uid === authUser.uid ? "bg-red-600/8 ring-red-500/20" : "bg-white/5 ring-white/10"].join(" ")}>
+                          row.team.uid === authUser.uid ? "bg-red-600/8 ring-red-500/20" : "bg-white/5 ring-white/10",
+                          row.health && !row.health.ok ? "border border-amber-500/25" : ""].join(" ")}>
                           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                             <div className="min-w-0">
                               <div className="flex flex-wrap items-center gap-2">
                                 {leaderboardGwView !== "live" ? (
                                   <Pill tone={weekRank === 1 ? "green" : "neutral"}>GW #{weekRank}</Pill>
+                                ) : null}
+                                {leaderboardGwView === "live" && row.health && !row.health.ok ? (
+                                  <Pill tone="amber">Fix squad</Pill>
                                 ) : null}
                                 <RankMovementPill
                                   overallRank={movement.overallRank}
@@ -4612,6 +4824,13 @@ export default function Page() {
                                 <span className="font-semibold text-zinc-200">
                                   {resolveOwnerDisplayName(row.team, authUser)}
                                 </span>
+                                <span className="text-zinc-500">
+                                  {" · "}
+                                  Last login{" "}
+                                  <span className="font-medium text-zinc-300">
+                                    {formatLastLogin(lastLoginByUid.get(row.team.uid), lastLoginNowMs)}
+                                  </span>
+                                </span>
                               </div>
                               <div className="mt-2 flex flex-wrap gap-2 text-xs">
                                 <Pill><span className="text-zinc-400">Captain</span>{" "}<span className="font-semibold">{row.capName}</span></Pill>
@@ -4621,6 +4840,13 @@ export default function Page() {
                                     <span className="text-zinc-400">Fielding</span>{" "}
                                     <span className="font-semibold">{row.fieldingLabel}</span>
                                   </Pill>
+                                ) : null}
+                                {leaderboardGwView === "live" && row.health && !row.health.ok ? (
+                                  row.health.labels.map((label) => (
+                                    <Pill key={label} tone="red">
+                                      {label}
+                                    </Pill>
+                                  ))
                                 ) : null}
                               </div>
                             </div>
@@ -4703,6 +4929,7 @@ export default function Page() {
                         </optgroup>
                         <optgroup label="Season">
                           <option value="seasonPts">Season Σ</option>
+                          <option value="playedGws">GWs played</option>
                         </optgroup>
                       </select>
                       <select
@@ -4714,6 +4941,15 @@ export default function Page() {
                         <option value="desc">High → low</option>
                         <option value="asc">Low → high</option>
                       </select>
+                      <label className="flex items-center gap-2 rounded-xl bg-white/5 px-3 py-2 text-sm text-zinc-300 ring-1 ring-white/10 sm:whitespace-nowrap">
+                        <input
+                          type="checkbox"
+                          checked={hideInactivePlayers}
+                          onChange={(e) => setHideInactivePlayers(e.target.checked)}
+                          className="rounded border-white/20 bg-zinc-900 text-red-600 focus:ring-red-500/60"
+                        />
+                        Hide inactive
+                      </label>
                     </div>
                   </div>
                   <div className="relative overflow-hidden rounded-2xl ring-1 ring-white/10">

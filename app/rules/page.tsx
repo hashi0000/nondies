@@ -1,6 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowLeft, Award, Calendar, ChevronRight, Crown, Dices, Gavel, Layers, Repeat, Star, TrendingUp, Trophy, Users, Zap } from "lucide-react";
+import { ArrowLeft, Award, BarChart3, Calendar, ChevronRight, Crown, Dices, Gavel, Layers, Repeat, Star, TrendingUp, Trophy, Users, Zap } from "lucide-react";
 import {
   BUDGET_BASE,
   DYNAMIC_BUDGET_HEADROOM,
@@ -100,6 +100,7 @@ const TOC = [
   { id: "regulations", label: "League regulations" },
   { id: "team",        label: "Building your team" },
   { id: "transfers",   label: "Transfers" },
+  { id: "pricing",     label: "Dynamic pricing" },
   { id: "squads",      label: "1st XI & 2nd XI" },
   { id: "points",      label: "Points system" },
   { id: "roles",       label: "Captain, VC & WK" },
@@ -143,22 +144,26 @@ export default function RulesPage() {
           </div>
 
           <p className="mt-5 text-base leading-relaxed text-zinc-400 max-w-2xl">
-            Sign in (Google or email), then pick <strong className="text-zinc-200">{SQUAD_SIZE} players</strong> from the club list within a{" "}
-            <strong className="text-zinc-200">dynamic squad cap</strong> (usually £{DYNAMIC_BUDGET_MIN}–£{DYNAMIC_BUDGET_MAX}; see below — compact squads like larger games at £55m/11 or £35m/6).
-            Players are tagged <strong className="text-zinc-200">1st XI</strong> or <strong className="text-zinc-200">2nd XI</strong> with different price bands so you must mix tiers.
+            Sign in (Google or email), then pick <strong className="text-zinc-200">{SQUAD_SIZE} players</strong> in a{" "}
+            <strong className="text-zinc-200">2-2-2-1</strong> shape (batters, all-rounders, bowlers, wicketkeeper) within a{" "}
+            <strong className="text-zinc-200">dynamic squad cap</strong> (usually £{DYNAMIC_BUDGET_MIN}–£{DYNAMIC_BUDGET_MAX} — see{" "}
+            <a href="#pricing" className="font-medium text-red-400 underline decoration-red-500/50 underline-offset-2 hover:text-red-300">Dynamic pricing</a>).
+            Player prices move with <strong className="text-zinc-200">form</strong> (£{POOL_PRICE_BAND.min}–£{POOL_PRICE_BAND.max}).
+            Tags <strong className="text-zinc-200">1st XI</strong> / <strong className="text-zinc-200">2nd XI</strong> are filters only — a hot 2nd XI pick can cost as much as anyone.
             Assign captain, vice-captain and wicketkeeper, save to Firebase, and earn points from stats the admin records each gameweek.{" "}
             <strong className="text-zinc-300">Transfers:</strong>{" "}
             <strong className="text-zinc-200">{FREE_TRANSFERS_PER_WEEK}</strong> free change per gameweek (up to{" "}
-            <strong className="text-zinc-200">{MAX_BANKED_FREE_TRANSFERS}</strong> banked); each extra change is planned at{" "}
-            <strong className="text-zinc-200">−{POINTS_PER_EXTRA_TRANSFER}</strong> league points — see <a href="#transfers" className="font-medium text-red-400 underline decoration-red-500/50 underline-offset-2 hover:text-red-300">Transfers</a> below.
+            <strong className="text-zinc-200">{MAX_BANKED_FREE_TRANSFERS}</strong> banked); each extra change costs{" "}
+            <strong className="text-zinc-200">−{POINTS_PER_EXTRA_TRANSFER}</strong> league points — see{" "}
+            <a href="#transfers" className="font-medium text-red-400 underline decoration-red-500/50 underline-offset-2 hover:text-red-300">Transfers</a> below.
           </p>
         </div>
 
         {/* Quick stats */}
         <div className="mb-10 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           <StatCard value={String(SQUAD_SIZE)} label="Players per squad" sub="1 captain · 1 VC · 1 WK" />
-          <StatCard value={`£${DYNAMIC_BUDGET_MIN}–${DYNAMIC_BUDGET_MAX}`} label="Squad cap" sub={`Dynamic · +£${DYNAMIC_BUDGET_HEADROOM} headroom`} />
-          <StatCard value={`−${POINTS_PER_EXTRA_TRANSFER}`} label="Extra transfer" sub={`${FREE_TRANSFERS_PER_WEEK} free/wk · ${MAX_BANKED_FREE_TRANSFERS} max banked`} />
+          <StatCard value={`£${POOL_PRICE_BAND.min}–${POOL_PRICE_BAND.max}`} label="Draft prices" sub="Pool-wide form rank" />
+          <StatCard value={`£${DYNAMIC_BUDGET_MIN}–${DYNAMIC_BUDGET_MAX}`} label="Squad cap" sub={`+£${DYNAMIC_BUDGET_HEADROOM} headroom`} />
           <StatCard value="2×" label="Captain bonus" sub="VC gets 1.5×" />
           <StatCard value="∞" label="Gameweeks" sub="Points carry over" />
         </div>
@@ -251,12 +256,11 @@ export default function RulesPage() {
                       <strong className="text-white">not</strong> implemented.
                     </li>
                     <li>
-                      <strong className="text-white">Dynamic prices:</strong> once a player has gameweek history, their draft price is set from{" "}
-                      <strong className="text-white">performance rank in the whole pool</strong> (60% season pts-per-game + 40% last 3 played weeks; DNP weeks ignored).
-                      Draft prices run from <strong className="text-white">£{POOL_PRICE_BAND.min}–£{POOL_PRICE_BAND.max}</strong> — top form ≈ £{POOL_PRICE_BAND.max}, most of the pool sits around £10–£12, coldest ≈ £{POOL_PRICE_BAND.min}.
-                      <strong className="text-white"> 1st XI / 2nd XI</strong> tags are for squad filters only; a hot 2nd XI player can cost as much as anyone.
-                      When the admin <strong className="text-white">ends a gameweek</strong>, listed prices are saved at the new draft level. The squad cap rises or falls with the market. The app does{" "}
-                      <strong className="text-white">not</strong> track purchase price — only the current cap when saving.
+                      <strong className="text-white">Dynamic prices &amp; cap:</strong> see the{" "}
+                      <a href="#pricing" className="font-medium text-red-400 underline decoration-red-500/50 underline-offset-2 hover:text-red-300">
+                        Dynamic pricing
+                      </a>{" "}
+                      section — pool-wide form rank (£{POOL_PRICE_BAND.min}–£{POOL_PRICE_BAND.max}), dynamic squad cap (£{DYNAMIC_BUDGET_MIN}–£{DYNAMIC_BUDGET_MAX}), and when listed prices update.
                     </li>
                   </ul>
                 </Card>
@@ -312,7 +316,7 @@ export default function RulesPage() {
                           {
                             n: "2",
                             title: <>Stay under the <strong className="text-white">squad cap</strong> shown in Draft.</>,
-                            note: `Cap = cheapest legal squad + £${DYNAMIC_BUDGET_HEADROOM} (between £${DYNAMIC_BUDGET_MIN}–£${DYNAMIC_BUDGET_MAX}). Prices are form-adjusted.`,
+                            note: `Cap = cheapest legal 2-2-2-1 + £${DYNAMIC_BUDGET_HEADROOM} (between £${DYNAMIC_BUDGET_MIN}–£${DYNAMIC_BUDGET_MAX}). See Dynamic pricing.`,
                           },
                           {
                             n: "3",
@@ -352,7 +356,8 @@ export default function RulesPage() {
                           `You can replace your whole squad any time the draft is unlocked (until ${LINEUP_LOCK_SUMMARY}).`,
                           "Leaderboard totals are cumulative — earlier weeks still count.",
                           "When the admin ends a gameweek, that week’s points are banked and the next gameweek opens.",
-                          "Listed player prices update when a gameweek ends (from form); admins can still override listed price and 1st / 2nd XI in Admin.",
+                          "Listed player prices update when a gameweek ends (from form rank across the whole pool).",
+                          "If your saved squad is over the new cap, open Draft and rebuild — you cannot save until spend fits.",
                           "On the Draft tab, use All squads, 1st XI only, or 2nd XI only to filter the pool.",
                         ].map((text) => (
                           <li key={text} className="flex gap-3">
@@ -394,13 +399,121 @@ export default function RulesPage() {
                   </li>
                   <li className="flex gap-3">
                     <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500/80" aria-hidden />
+                    <span>
+                      <strong className="text-white">Pricing update amnesty:</strong> when the committee announces a major pricing change, the admin may enable a{" "}
+                      <strong className="text-white">free full squad rebuild</strong> for that gameweek — unlimited player changes with{" "}
+                      <strong className="text-white">no transfer penalties</strong> until lineup lock. The budget cap still applies; check the Pavilion for announcements.
+                    </span>
+                  </li>
+                  <li className="flex gap-3">
+                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500/80" aria-hidden />
                     <span className="text-zinc-400">
-                      The app applies this on save and rolls free transfers forward when an admin ends the gameweek. Tunables live in{" "}
+                      The app applies transfer charges on save and rolls free transfers forward when an admin ends the gameweek. Tunables live in{" "}
                       <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-xs text-zinc-200">lib/leagueConfig.ts</code>.
                     </span>
                   </li>
                 </ul>
               </Card>
+            </Section>
+
+            <Section id="pricing">
+              <SectionTitle icon={<BarChart3 className="h-5 w-5" />}>Dynamic pricing &amp; squad cap</SectionTitle>
+              <div className="grid gap-3">
+                <Card>
+                  <p className="text-sm leading-relaxed text-zinc-300">
+                    From GW2 onward, every player who has <strong className="text-white">played at least one gameweek</strong> gets a{" "}
+                    <strong className="text-white">draft price</strong> between <strong className="text-white">£{POOL_PRICE_BAND.min}</strong> and{" "}
+                    <strong className="text-white">£{POOL_PRICE_BAND.max}</strong>. Prices are ranked across the{" "}
+                    <strong className="text-white">whole pool</strong> — not separate 1st XI / 2nd XI caps — so in-form value picks can rise to premium levels.
+                  </p>
+                  <p className="mt-3 text-sm leading-relaxed text-zinc-300">
+                    The number you see in <strong className="text-white">Draft</strong> is the live form price. The admin&apos;s{" "}
+                    <strong className="text-white">listed price</strong> (stored in Firebase) updates when a gameweek{" "}
+                    <strong className="text-white">ends</strong>. The app does <strong className="text-white">not</strong> track what you originally paid — only whether your squad fits the{" "}
+                    <strong className="text-white">current cap</strong> when you save.
+                  </p>
+                </Card>
+
+                <Card>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-3">How form rank becomes a price</div>
+                  <ol className="grid gap-3 text-sm text-zinc-300 list-decimal pl-5">
+                    <li>
+                      <strong className="text-white">Did not play (DNP)</strong> weeks are ignored — they do not count against form or pricing.
+                    </li>
+                    <li>
+                      For each player, work out <strong className="text-white">points per gameweek played</strong>: season average (60% weight) plus average of their{" "}
+                      <strong className="text-white">last 3 played weeks</strong> (40% weight).
+                    </li>
+                    <li>
+                      Rank everyone with history from <strong className="text-white">hottest → coldest</strong>.
+                    </li>
+                    <li>
+                      Map that rank to £{POOL_PRICE_BAND.min}–£{POOL_PRICE_BAND.max}. Top form ≈ £{POOL_PRICE_BAND.max}; most of the pool clusters around{" "}
+                      <strong className="text-white">£10–£12</strong>; coldest ≈ £{POOL_PRICE_BAND.min}.
+                    </li>
+                  </ol>
+                </Card>
+
+                <Card>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-3">Dynamic squad cap</div>
+                  <p className="text-sm leading-relaxed text-zinc-300 mb-3">
+                    Your squad must stay within the cap shown in Draft. It is calculated as:
+                  </p>
+                  <div className="rounded-xl bg-white/[0.04] px-4 py-3 ring-1 ring-white/10 text-sm text-zinc-200">
+                    <strong className="text-white">Cap</strong> = cheapest legal{" "}
+                    <strong className="text-white">{SQUAD_ROLES.bat}-{SQUAD_ROLES.ar}-{SQUAD_ROLES.bowl}-{SQUAD_ROLES.wk}</strong> squad at current prices +{" "}
+                    <strong className="text-white">£{DYNAMIC_BUDGET_HEADROOM}</strong> headroom, clamped between{" "}
+                    <strong className="text-white">£{DYNAMIC_BUDGET_MIN}</strong> and <strong className="text-white">£{DYNAMIC_BUDGET_MAX}</strong>.
+                  </div>
+                  <p className="mt-3 text-sm leading-relaxed text-zinc-400">
+                    That headroom lets you pick a couple of in-form premiums instead of seven bare-minimum picks. When prices rise after a hot week, the cap can rise too — but never above £{DYNAMIC_BUDGET_MAX}.
+                  </p>
+                </Card>
+
+                <Card>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-3">Over budget?</div>
+                  <ul className="grid gap-2 text-sm text-zinc-300 list-disc pl-4">
+                    <li>
+                      If your <strong className="text-white">saved squad</strong> costs more than the cap, the app shows a warning and blocks save until you fix it in Draft.
+                    </li>
+                    <li>
+                      Swap players for cheaper same-role picks, or drop an expensive star for a value option — you still need{" "}
+                      <strong className="text-white">{SQUAD_ROLES.bat} batters, {SQUAD_ROLES.ar} all-rounders, {SQUAD_ROLES.bowl} bowlers, {SQUAD_ROLES.wk} WK</strong>.
+                    </li>
+                    <li>
+                      <strong className="text-white">League points already scored are not removed</strong> — only your squad composition and future picks change.
+                    </li>
+                    <li>
+                      After a major pricing change, the committee may run a <strong className="text-white">free squad rebuild week</strong> (no transfer penalties — see Transfers).
+                    </li>
+                  </ul>
+                </Card>
+
+                <Card>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-3">Examples</div>
+                  <Table
+                    headers={["Situation", "What happens"]}
+                    rows={[
+                      [
+                        "Top scorer in the pool",
+                        <span key="a" className="text-zinc-300">Draft price moves toward <strong className="text-white">£{POOL_PRICE_BAND.max}</strong>, even if tagged 2nd XI</span>,
+                      ],
+                      [
+                        "Player did not play (DNP)",
+                        <span key="b" className="text-zinc-300">That week ignored for form; grey dot on their card</span>,
+                      ],
+                      [
+                        "Played but did not bat (DNB)",
+                        <span key="c" className="text-zinc-300">Still counts as played; fielding/bowling points count; sky dot if 0 batting pts</span>,
+                      ],
+                      [
+                        "Admin ends gameweek",
+                        <span key="d" className="text-zinc-300">Listed prices saved at new draft levels; next week&apos;s cap recalculates</span>,
+                      ],
+                    ]}
+                  />
+                </Card>
+              </div>
             </Section>
 
             {/* 1st XI & 2nd XI — matches app squad tiers */}
@@ -409,29 +522,32 @@ export default function RulesPage() {
               <div className="grid gap-3">
                 <Card>
                   <p className="text-sm leading-relaxed text-zinc-300">
-                    Every player has a <strong className="text-white">squad tier</strong> shown in the draft pool: <strong className="text-white">1st XI</strong> (first-team squad)
-                    or <strong className="text-white">2nd XI</strong> (second-team / value). The seeded roster uses higher prices for 1st XI and lower for 2nd XI so you{" "}
-                    <strong className="text-white">cannot</strong> afford {SQUAD_SIZE} cheapest 1st XI picks within the squad cap — you must blend both tiers.
+                    Every player has a <strong className="text-white">squad tier</strong> tag in the draft pool: <strong className="text-white">1st XI</strong> (first-team squad)
+                    or <strong className="text-white">2nd XI</strong> (second-team / value). Use the filters to browse tiers — but{" "}
+                    <strong className="text-white">draft prices come from form rank across the whole pool</strong>, not from the tag.
+                    A 2nd XI player on a hot streak can cost £{POOL_PRICE_BAND.max}; a quiet 1st XI pick can be cheaper.
                   </p>
                   <p className="mt-3 text-sm leading-relaxed text-zinc-300">
-                    Default seeding in the app: roughly <strong className="text-white">18</strong> players as 1st XI and <strong className="text-white">17</strong> as 2nd XI.
-                    Admins can change tier and price per player in <strong className="text-white">Admin → Player stats</strong> (saved to Firestore).
+                    At season start, seeded listed prices were higher for 1st XI and lower for 2nd XI so you could not afford seven 1st XI picks.
+                    As the season runs, <strong className="text-white">form-driven prices</strong> take over (see{" "}
+                    <a href="#pricing" className="font-medium text-red-400 underline decoration-red-500/50 underline-offset-2 hover:text-red-300">Dynamic pricing</a>).
+                    Admins can still change tier, role and listed price in <strong className="text-white">Admin → Player stats</strong>.
                   </p>
                 </Card>
                 <Card>
-                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-3">Price bands (as shipped in the seed data)</div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-3">Starting listed prices (seed data only)</div>
                   <Table
-                    headers={["Squad", "Typical price range", "Purpose"]}
+                    headers={["Squad", "Typical starting price", "Note"]}
                     rows={[
                       [
                         <span key="t1" className="font-semibold text-sky-300">1st XI</span>,
                         "£12 – £18",
-                        <span key="d1" className="text-zinc-300">Premium picks — high floor so a full 1st XI squad is over budget</span>,
+                        <span key="d1" className="text-zinc-300">Premium picks at season start — live draft price follows form</span>,
                       ],
                       [
                         <span key="t2" className="font-semibold text-zinc-200">2nd XI</span>,
                         "£5 – £8",
-                        <span key="d2" className="text-zinc-300">Value picks — mix with 1st XI to finish under the cap</span>,
+                        <span key="d2" className="text-zinc-300">Value picks at season start — can rise to £{POOL_PRICE_BAND.max} in form</span>,
                       ],
                     ]}
                   />
@@ -684,6 +800,7 @@ export default function RulesPage() {
                 <p className="text-sm leading-relaxed text-zinc-300 mb-4">
                   Each player&apos;s last 5 gameweeks are shown as coloured dots on their card in the draft pool.
                   Use these to spot who is in form and who has gone cold before you commit your captain pick.
+                  Form dots also drive <a href="#pricing" className="font-medium text-red-400 underline decoration-red-500/50 underline-offset-2 hover:text-red-300">dynamic pricing</a> (DNP weeks excluded).
                 </p>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div>
@@ -693,8 +810,9 @@ export default function RulesPage() {
                         { color: "bg-emerald-400", label: "60+ pts", desc: "Excellent performance" },
                         { color: "bg-amber-400",   label: "30–59 pts", desc: "Good performance" },
                         { color: "bg-orange-500",  label: "1–29 pts", desc: "Below average" },
-                        { color: "bg-zinc-600",    label: "0 pts",    desc: "Did not contribute" },
-                        { color: "bg-white/10",    label: "No data",  desc: "Did not play / new player" },
+                        { color: "bg-sky-500/50 ring-1 ring-sky-400/35", label: "DNB", desc: "Played but did not bat (0 batting pts)" },
+                        { color: "bg-zinc-600/50 ring-1 ring-zinc-500/40", label: "DNP", desc: "Did not play — ignored for form & pricing" },
+                        { color: "bg-white/10",    label: "No data",  desc: "No history yet" },
                       ].map((d) => (
                         <div key={d.label} className="flex items-center gap-3 text-sm">
                           <span className={`h-3 w-3 rounded-full shrink-0 ${d.color}`} />
@@ -759,8 +877,12 @@ export default function RulesPage() {
               <div className="grid gap-3 sm:grid-cols-2">
                 {[
                   {
-                    title: "Mix 1st XI and 2nd XI",
-                    body: "The economy is built so you need value picks. Plan a few premium 1st XI stars, then fill the rest with 2nd XI players who still score if they play.",
+                    title: "Mix price tiers, not just tags",
+                    body: "1st / 2nd XI tags help you browse — but prices follow form. A cheap 2nd XI pick in form can outprice a stale premium.",
+                  },
+                  {
+                    title: "Watch the cap after End GW",
+                    body: "When prices update, check Draft. If you are over budget, rebuild before lock — your season points stay.",
                   },
                   {
                     title: "Captain the batter, not the bowler",
@@ -780,7 +902,7 @@ export default function RulesPage() {
                   },
                   {
                     title: "Spread the budget",
-                    body: "Several mid-priced picks plus one or two punts often beats blowing most of the cap on a handful of 1st XI premiums with weak fillers.",
+                    body: "Several mid-priced picks plus one or two in-form stars often beats blowing the cap on one £20 player with weak fillers.",
                   },
                   {
                     title: "Consistency beats one miracle week",

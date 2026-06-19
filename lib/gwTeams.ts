@@ -4,6 +4,7 @@ import {
   writeBatch,
   type Firestore,
 } from "firebase/firestore";
+import { FREE_TRANSFERS_PER_WEEK } from "./leagueConfig";
 
 /** One manager's locked squad for a completed gameweek. */
 export type GwTeamSnapshot = {
@@ -166,7 +167,7 @@ export function parseGwTeamsDoc(raw: Record<string, unknown>): GwTeamsDoc | null
       transferBaselinePlayers: Array.isArray(row.transferBaselinePlayers)
         ? row.transferBaselinePlayers.map((x) => Number(x)).filter((n) => Number.isFinite(n))
         : players,
-      freeTransfersAtGwStart: Number(row.freeTransfersAtGwStart ?? 1),
+      freeTransfersAtGwStart: Number(row.freeTransfersAtGwStart ?? FREE_TRANSFERS_PER_WEEK),
       transferPenaltyPointsApplied: Number(row.transferPenaltyPointsApplied ?? 0),
       playerJoinedGameweek:
         row.playerJoinedGameweek && typeof row.playerJoinedGameweek === "object"

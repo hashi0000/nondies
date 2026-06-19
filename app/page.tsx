@@ -69,6 +69,7 @@ import {
   MAX_FREE_TRANSFERS_IN_GW,
   penaltyPointsForExtras,
   pricingAmnestyPavilionMessage,
+  resolveFreeTransfersAtGwStart,
   transferExtrasAgainstFree,
 } from "@/lib/transfers";
 import { normalizePlayCricketName } from "@/lib/playCricket/names";
@@ -1707,9 +1708,7 @@ function buildTransferSavePreview(
   }
   const baseline = squadTransferBaseline(mySavedTeam, penaltiesApply, currentGameweek);
   const F =
-    typeof mySavedTeam.freeTransfersAtGwStart === "number" && Number.isFinite(mySavedTeam.freeTransfersAtGwStart)
-      ? Math.max(0, Math.min(Math.floor(mySavedTeam.freeTransfersAtGwStart), MAX_FREE_TRANSFERS_IN_GW))
-      : MAX_FREE_TRANSFERS_IN_GW;
+    resolveFreeTransfersAtGwStart(mySavedTeam.freeTransfersAtGwStart);
   const T = countOutgoingPlayerChanges(baseline, selected);
   const extras = penaltiesApply ? transferExtrasAgainstFree(T, F) : 0;
   const penaltyDue = penaltiesApply ? penaltyPointsForExtras(extras) : 0;
@@ -3193,9 +3192,7 @@ export default function Page() {
   /** Free transfers you had when this gameweek opened (from saved team). */
   const freeTransfersAtLock = useMemo(() => {
     if (!mySavedTeam) return null;
-    return typeof mySavedTeam.freeTransfersAtGwStart === "number" && Number.isFinite(mySavedTeam.freeTransfersAtGwStart)
-      ? Math.max(0, Math.min(Math.floor(mySavedTeam.freeTransfersAtGwStart), MAX_FREE_TRANSFERS_IN_GW))
-      : MAX_FREE_TRANSFERS_IN_GW;
+    return resolveFreeTransfersAtGwStart(mySavedTeam.freeTransfersAtGwStart);
   }, [mySavedTeam]);
 
   const leaderboard = useMemo(() => {
@@ -3412,10 +3409,7 @@ export default function Page() {
             : existing.players.length === SQUAD_SIZE
               ? [...existing.players]
               : [...newPlayers];
-          freeAtGwStart =
-            typeof existing.freeTransfersAtGwStart === "number" && Number.isFinite(existing.freeTransfersAtGwStart)
-              ? Math.max(0, Math.min(Math.floor(existing.freeTransfersAtGwStart), MAX_FREE_TRANSFERS_IN_GW))
-              : MAX_FREE_TRANSFERS_IN_GW;
+          freeAtGwStart = resolveFreeTransfersAtGwStart(existing.freeTransfersAtGwStart);
           const rollBaselineForNewJoinerGrace =
             !penaltiesApply && transferPenaltiesApplyInGameweek(currentGameweek);
           baseline = rollBaselineForNewJoinerGrace ? [...newPlayers] : baselineFromStored;
@@ -4049,10 +4043,7 @@ export default function Page() {
           const baseline =
             team.transferBaselinePlayers?.length === SQUAD_SIZE ? team.transferBaselinePlayers : team.players;
           const TEnd = countOutgoingPlayerChanges(baseline, team.players);
-          const F =
-            typeof team.freeTransfersAtGwStart === "number" && Number.isFinite(team.freeTransfersAtGwStart)
-              ? Math.max(0, Math.min(Math.floor(team.freeTransfersAtGwStart), MAX_FREE_TRANSFERS_IN_GW))
-              : MAX_FREE_TRANSFERS_IN_GW;
+          const F = resolveFreeTransfersAtGwStart(team.freeTransfersAtGwStart);
           const unused = Math.max(0, F - TEnd);
           const nextFree = freeTransfersAfterRollover(unused);
           const cumulativeBefore = team.cumulativePoints ?? 0;
@@ -5438,7 +5429,7 @@ export default function Page() {
                       <div className="rounded-xl bg-white/[0.04] px-4 py-3 text-xs leading-relaxed text-zinc-400 ring-1 ring-white/10">
                         <span className="font-semibold text-zinc-200">Transfer policy</span> (enforced on save; rollover on End GW):{" "}
                         <strong className="text-zinc-300">GW1 pre-lock = unlimited free changes</strong>, then{" "}
-                        <strong className="text-zinc-300">{FREE_TRANSFERS_PER_WEEK}</strong> free player change per gameweek, up to{" "}
+                        <strong className="text-zinc-300">{FREE_TRANSFERS_PER_WEEK}</strong> free player changes per gameweek, up to{" "}
                         <strong className="text-zinc-300">{MAX_BANKED_FREE_TRANSFERS}</strong> banked, max{" "}
                         <strong className="text-zinc-300">{MAX_FREE_TRANSFERS_IN_GW}</strong> free in hand, then{" "}
                         <strong className="text-zinc-300">−{POINTS_PER_EXTRA_TRANSFER}</strong> league points per extra change. Tunables in{" "}

@@ -8,6 +8,17 @@ import {
 /** Max free transfers you can have available in one gameweek (weekly free + bank cap). */
 export const MAX_FREE_TRANSFERS_IN_GW = FREE_TRANSFERS_PER_WEEK + MAX_BANKED_FREE_TRANSFERS;
 
+/** Free allowance at GW start — never below the current weekly free (policy bumps apply immediately). */
+export function resolveFreeTransfersAtGwStart(stored: number | undefined | null): number {
+  if (typeof stored === "number" && Number.isFinite(stored)) {
+    return Math.max(
+      FREE_TRANSFERS_PER_WEEK,
+      Math.min(Math.floor(stored), MAX_FREE_TRANSFERS_IN_GW),
+    );
+  }
+  return MAX_FREE_TRANSFERS_IN_GW;
+}
+
 /**
  * Count of players swapped out vs `baseline` (same as players in when squad sizes match).
  * Captain / VC / keeper-only changes do not count.

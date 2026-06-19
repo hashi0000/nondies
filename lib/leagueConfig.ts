@@ -61,9 +61,9 @@ export const ROLE_LABEL: Record<PlayerRole, string> = {
 
 // ─── Transfer policy (rules + enforced in app on save / End GW) ─────────────
 /** How many player changes count as “free” each gameweek before penalties apply. */
-export const FREE_TRANSFERS_PER_WEEK = 1;
+export const FREE_TRANSFERS_PER_WEEK = 2;
 /**
- * Max unused free transfers carried into the next gameweek (1 + 1 banked → 2 usable).
+ * Max unused free transfers banked on top of the weekly allowance (2 + 2 banked → 4 usable in one GW).
  */
 export const MAX_BANKED_FREE_TRANSFERS = 2;
 /**

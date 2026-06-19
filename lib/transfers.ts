@@ -55,3 +55,15 @@ export function pricingAmnestyPavilionMessage(gameweek: number, lineupLockSummar
     `If you do rebuild in Draft until ${lineupLockSummary}, new picks use dynamic prices and there are no transfer penalties.`
   );
 }
+
+export function personalSpendCapPavilionMessage(spendCapExample?: string): string {
+  const capLine = spendCapExample
+    ? `Your personal cap is your saved squad spend (e.g. ${spendCapExample}). `
+    : `Your personal cap is your saved squad spend at opening prices. `;
+  return (
+    `📢 Transfer update — personal spend cap\n\n` +
+    `Original season squads: you don't have to change your team. ` +
+    capLine +
+    `Swap within that envelope — new picks use dynamic prices, kept players keep their opening price. New teams still use the league cap.`
+  );
+}

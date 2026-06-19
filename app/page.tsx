@@ -98,6 +98,9 @@ import {
   priceForIdFromMap,
   isGrandfatheredPricingTeam,
   GRANDFATHERED_SQUAD_MESSAGE,
+  PERSONAL_SPEND_CAP_NOTICE_KEY,
+  draftBudgetForTeam,
+  personalSpendCapForTeam,
   purchasePricesForRestoredSnapshot,
   squadSpend,
   squadSpendForTeam,
@@ -578,13 +581,76 @@ function SquadOverBudgetBanner({
   );
 }
 
-function GrandfatheredSquadNotice() {
+function PersonalSpendCapAnnouncement({
+  spendCap,
+  onDismiss,
+  onOpenDraft,
+}: {
+  spendCap: number | null;
+  onDismiss: () => void;
+  onOpenDraft: () => void;
+}) {
   return (
-    <div className="rounded-2xl border border-sky-500/35 bg-sky-500/10 px-4 py-3.5 text-sm text-sky-100 ring-1 ring-sky-500/25">
-      <div className="font-semibold text-sky-50">Your squad is fine as it is</div>
-      <p className="mt-1.5 leading-relaxed text-sky-100/90">
-        {GRANDFATHERED_SQUAD_MESSAGE} Original picks keep their opening price; the Draft pool shows live prices for anyone you add or swap in.
-      </p>
+    <div className="rounded-2xl border border-sky-400/45 bg-gradient-to-br from-sky-500/15 to-blue-600/10 px-4 py-4 text-sm text-sky-50 ring-1 ring-sky-400/35">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sky-500/25 ring-1 ring-sky-400/40">
+          <Shield className="h-4 w-4 text-sky-100" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-semibold text-sky-50">Transfer update — personal spend cap</span>
+            <Pill tone="blue">Original season squads</Pill>
+          </div>
+          <p className="mt-2 leading-relaxed text-sky-100/95">
+            {GRANDFATHERED_SQUAD_MESSAGE} Original picks keep their opening price; anyone you add or swap in uses today&apos;s dynamic prices.
+            {spendCap != null ? (
+              <>
+                {" "}
+                Your transfer budget is <strong className="text-white">{money(spendCap)}</strong> — your current saved squad spend — so you can reshuffle in-form players without fighting the league cap.
+              </>
+            ) : (
+              <>
+                {" "}
+                Once you have a saved squad, your transfer budget equals that squad&apos;s spend at opening prices — not the league-wide cap.
+              </>
+            )}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onOpenDraft}
+              className="rounded-xl bg-sky-600 px-3 py-2 text-xs font-bold text-white ring-1 ring-sky-500/50 hover:bg-sky-500"
+            >
+              Open Draft
+            </button>
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="rounded-xl bg-white/10 px-3 py-2 text-xs font-semibold text-sky-100 ring-1 ring-white/15 hover:bg-white/15"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="shrink-0 rounded-lg p-1.5 text-sky-200/80 hover:bg-white/10 hover:text-white"
+          aria-label="Dismiss transfer update"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function GrandfatheredSquadReminder({ spendCap }: { spendCap: number }) {
+  return (
+    <div className="rounded-xl border border-sky-500/25 bg-sky-500/8 px-3 py-2.5 text-xs text-sky-100/90 ring-1 ring-sky-500/20">
+      <strong className="font-semibold text-sky-50">Personal spend cap {money(spendCap)}</strong>
+      {" — "}
+      reshuffle within your saved squad spend; new picks use dynamic prices.
     </div>
   );
 }
@@ -1270,9 +1336,13 @@ function validateTeam(args: {
       checks.captain = true;
       checks.viceCaptain = true;
       checks.keeper = true;
-      checks.withinBudget = true;
       checks.uniqueLeadership = true;
       checks.allAvailable = true;
+      if (!checks.withinBudget) {
+        problems.push(
+          `Stay within your saved squad spend (${money(budget)}). Squad costs ${money(spend)} at your purchase prices — swap or remove players.`,
+        );
+      }
     }
   }
   const ok = Object.values(checks).every(Boolean);
@@ -2203,6 +2273,8 @@ export default function Page() {
   const [ownerNameTouched, setOwnerNameTouched] = useState(false);
   const [latestChatMeta, setLatestChatMeta] = useState<LatestChatMeta | null>(null);
   const [chatLastSeenAt, setChatLastSeenAt] = useState<Timestamp | null>(null);
+  const [spendCapNoticeDismissed, setSpendCapNoticeDismissed] = useState(false);
+  const [spendCapNoticeReady, setSpendCapNoticeReady] = useState(false);
 
   // Admin
   const [adminAuthed, setAdminAuthed] = useState(false);
@@ -2937,6 +3009,40 @@ export default function Page() {
     [teams, authUser],
   );
 
+  const personalSpendCap = useMemo(
+    () => personalSpendCapForTeam(mySavedTeam, listedPriceForId, marketPriceForId),
+    [mySavedTeam, listedPriceForId, marketPriceForId],
+  );
+  const draftBudget = useMemo(
+    () => draftBudgetForTeam(squadBudget, mySavedTeam, listedPriceForId, marketPriceForId),
+    [squadBudget, mySavedTeam, listedPriceForId, marketPriceForId],
+  );
+  const usesPersonalSpendCap = personalSpendCap != null;
+  const showPersonalSpendCapAnnouncement =
+    authUser &&
+    mySavedTeam &&
+    isGrandfatheredPricingTeam(mySavedTeam) &&
+    spendCapNoticeReady &&
+    !spendCapNoticeDismissed;
+
+  function dismissPersonalSpendCapNotice() {
+    try {
+      localStorage.setItem(PERSONAL_SPEND_CAP_NOTICE_KEY, "1");
+    } catch {
+      /* private browsing / storage blocked */
+    }
+    setSpendCapNoticeDismissed(true);
+  }
+
+  useEffect(() => {
+    try {
+      setSpendCapNoticeDismissed(localStorage.getItem(PERSONAL_SPEND_CAP_NOTICE_KEY) === "1");
+    } catch {
+      setSpendCapNoticeDismissed(false);
+    }
+    setSpendCapNoticeReady(true);
+  }, []);
+
   const draftPurchasePrices = useMemo(
     () =>
       draftPurchasePricesForSelection(
@@ -2962,11 +3068,11 @@ export default function Page() {
         viceCaptain: builder.viceCaptain,
         keeper: builder.keeper,
         byId: playersById,
-        budget: squadBudget,
+        budget: draftBudget,
         priceForPlayerId: (id) => priceForIdFromMap(id, draftPurchasePrices, marketPriceForId),
         grandfatheredRelaxed: mySavedTeam ? isGrandfatheredPricingTeam(mySavedTeam) : false,
       }),
-    [builder, playersById, squadBudget, draftPurchasePrices, marketPriceForId, mySavedTeam],
+    [builder, playersById, draftBudget, draftPurchasePrices, marketPriceForId, mySavedTeam],
   );
 
   const mySavedTeamBudgetIssue = useMemo(() => {
@@ -3206,7 +3312,7 @@ export default function Page() {
 
   const bestSquad = useMemo(() => generateBestSquad(draftPoolPlayers), [draftPoolPlayers]);
   const selectedCount = builder.selected.length;
-  const budgetPct = Math.min(100, Math.max(0, (spend / squadBudget) * 100));
+  const budgetPct = Math.min(100, Math.max(0, (spend / draftBudget) * 100));
 
   /** Squad panel order = pick order (easier to edit than price-sorted). */
   const selectedInPickOrder = useMemo(
@@ -3236,7 +3342,7 @@ export default function Page() {
         (pid) => playersById.get(pid)?.basePrice ?? playersById.get(pid)?.price,
       );
       const nextSpend = squadSpend(nextSelected, nextPrices, (pid) => playersById.get(pid)?.price ?? 0);
-      if (!p.available || prev.selected.length >= SQUAD_SIZE || nextSpend > squadBudget) return prev;
+      if (!p.available || prev.selected.length >= SQUAD_SIZE || nextSpend > draftBudget) return prev;
       if (!canAddPlayerForRoles(id, prev.selected, playersById)) return prev;
       return { ...prev, selected: nextSelected };
     });
@@ -3261,7 +3367,7 @@ export default function Page() {
   async function saveTeam() {
     if (locked || !validation.ok || !authUser) return;
     if (!validation.checks.withinBudget) {
-      setActionError(`Squad spend is ${money(validation.spend)} — cap is ${money(squadBudget)}. Remove or swap players before saving.`);
+      setActionError(`Squad spend is ${money(validation.spend)} — cap is ${money(draftBudget)}. Remove or swap players before saving.`);
       return;
     }
     setSavingTeam(true);
@@ -4385,14 +4491,16 @@ export default function Page() {
               <Pill tone="red"><Users className="h-3.5 w-3.5" />{selectedCount}/{SQUAD_SIZE}</Pill>
               <span
                 title={
-                  dynamicBudget.floorCost != null
-                    ? `Cap = cheapest legal squad (${money(dynamicBudget.floorCost)}) + ${money(dynamicBudget.headroom)} headroom`
-                    : undefined
+                  usesPersonalSpendCap
+                    ? `Your transfer cap = current saved squad spend at purchase prices (${money(draftBudget)})`
+                    : dynamicBudget.floorCost != null
+                      ? `Cap = cheapest legal squad (${money(dynamicBudget.floorCost)}) + ${money(dynamicBudget.headroom)} headroom`
+                      : undefined
                 }
               >
-                <Pill tone={spend > squadBudget ? "red" : "neutral"}>
+                <Pill tone={spend > draftBudget ? "red" : "neutral"}>
                   <span className="font-medium">{money(spend)}</span>
-                  <span className="text-zinc-400">/ {money(squadBudget)}</span>
+                  <span className="text-zinc-400">/ {money(draftBudget)}</span>
                 </Pill>
               </span>
               <Pill tone={locked ? "amber" : "green"}>
@@ -4445,9 +4553,17 @@ export default function Page() {
           </div>
         ) : null}
 
-        {mySavedTeam && isGrandfatheredPricingTeam(mySavedTeam) && !pricingAmnestyActive ? (
+        {showPersonalSpendCapAnnouncement ? (
           <div className={mySavedTeamBudgetIssue ? "mt-3" : "mt-4"}>
-            <GrandfatheredSquadNotice />
+            <PersonalSpendCapAnnouncement
+              spendCap={personalSpendCap}
+              onDismiss={dismissPersonalSpendCapNotice}
+              onOpenDraft={() => setTab("draft")}
+            />
+          </div>
+        ) : mySavedTeam && usesPersonalSpendCap && !pricingAmnestyActive ? (
+          <div className={mySavedTeamBudgetIssue ? "mt-3" : "mt-4"}>
+            <GrandfatheredSquadReminder spendCap={personalSpendCap!} />
           </div>
         ) : null}
 
@@ -4470,9 +4586,11 @@ export default function Page() {
                 <Card>
                   <CardHeader title="Draft pool"
                     subtitle={
-                      mySavedTeam && isGrandfatheredPricingTeam(mySavedTeam)
-                        ? `${GRANDFATHERED_SQUAD_MESSAGE} Draft pool shows dynamic prices (£${POOL_PRICE_BAND.min}–£${POOL_PRICE_BAND.max}) for anyone you add or swap in.`
-                        : `Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — cap ${money(squadBudget)} at current market prices (£${POOL_PRICE_BAND.min}–£${POOL_PRICE_BAND.max}). New teams must fit the full dynamic rules.`
+                      mySavedTeam && usesPersonalSpendCap
+                        ? `${GRANDFATHERED_SQUAD_MESSAGE} Transfer cap ${money(draftBudget)} (your saved squad spend). New picks use dynamic prices (£${POOL_PRICE_BAND.min}–£${POOL_PRICE_BAND.max}).`
+                        : mySavedTeam && isGrandfatheredPricingTeam(mySavedTeam)
+                          ? `${GRANDFATHERED_SQUAD_MESSAGE} Draft pool shows dynamic prices (£${POOL_PRICE_BAND.min}–£${POOL_PRICE_BAND.max}) for anyone you add or swap in.`
+                          : `Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — cap ${money(squadBudget)} at current market prices (£${POOL_PRICE_BAND.min}–£${POOL_PRICE_BAND.max}). New teams must fit the full dynamic rules.`
                     }
                     right={
                       <div className="flex max-w-[16rem] flex-col items-end gap-2 sm:max-w-none">
@@ -4556,16 +4674,18 @@ export default function Page() {
                         </div>
                       </div>
                       <div className="rounded-xl bg-white/5 p-3 ring-1 ring-white/10 sm:col-span-2 lg:col-span-1">
-                        <div className="text-xs font-medium text-zinc-300">Budget</div>
+                        <div className="text-xs font-medium text-zinc-300">
+                          {usesPersonalSpendCap ? "Your spend cap" : "Budget"}
+                        </div>
                         <div className="mt-2 flex items-baseline justify-between gap-3">
                           <div className="text-sm text-zinc-200">
                             <span className="font-semibold text-white">{money(spend)}</span>{" "}
-                            <span className="text-zinc-400">/ {money(squadBudget)}</span>
+                            <span className="text-zinc-400">/ {money(draftBudget)}</span>
                           </div>
                           <div className="text-xs text-zinc-500">{Math.round(budgetPct)}%</div>
                         </div>
                         <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-white/10">
-                          <div className={["h-2 rounded-full", spend > squadBudget ? "bg-red-500" : "bg-red-600"].join(" ")} style={{ width: `${budgetPct}%` }} />
+                          <div className={["h-2 rounded-full", spend > draftBudget ? "bg-red-500" : "bg-red-600"].join(" ")} style={{ width: `${budgetPct}%` }} />
                         </div>
                       </div>
                     </div>
@@ -4610,7 +4730,7 @@ export default function Page() {
                               listedPriceForId,
                             ),
                             marketPriceForId,
-                          ) > squadBudget;
+                          ) > draftBudget;
                         const full = !selected && selectedCount >= SQUAD_SIZE;
                         const roleFull = !selected && !canAddPlayerForRoles(p.id, builder.selected, playersById);
                         const disabled = locked || !p.available || wouldBust || full || roleFull;
@@ -4749,7 +4869,7 @@ export default function Page() {
                               }`,
                               PROVISIONAL_SQUAD_SHAPE ? true : validation.checks.composition,
                             ],
-                            ["Budget", `${money(validation.spend)} / ${money(squadBudget)}`, validation.checks.withinBudget],
+                            ["Budget", `${money(validation.spend)} / ${money(draftBudget)}`, validation.checks.withinBudget],
                             ["Captain", builder.captain ? "Selected" : "Missing", validation.checks.captain],
                             ["Vice-captain", builder.viceCaptain ? "Selected" : "Missing", validation.checks.viceCaptain],
                             ["Wicketkeeper", builder.keeper ? "On WK player" : "Missing", validation.checks.keeper],

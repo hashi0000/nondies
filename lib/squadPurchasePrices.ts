@@ -60,6 +60,9 @@ export function isGrandfatheredPricingTeam(team: { firstSaveGameweek?: number })
 export const GRANDFATHERED_SQUAD_MESSAGE =
   "You don't have to change your squad. If you do, new picks and transfers use dynamic prices.";
 
+/** localStorage key — bump suffix when copy or policy changes materially. */
+export const PERSONAL_SPEND_CAP_NOTICE_KEY = "nondies-personal-spend-cap-v1";
+
 export function parsePurchasePriceMap(raw: unknown): PurchasePriceMap {
   if (!raw || typeof raw !== "object") return {};
   const out: PurchasePriceMap = {};
@@ -133,6 +136,29 @@ export function squadSpendForTeam(
   }
   const prices = resolveTeamPurchasePrices(team, listedPriceForId, marketPriceForId);
   return squadSpend(team.players, prices, marketPriceForId);
+}
+
+/**
+ * Original season squads draft against their saved spend (purchase prices), not the league dynamic cap.
+ * Returns null when the league-wide cap applies (new teams or no saved squad yet).
+ */
+export function personalSpendCapForTeam(
+  team: TeamPurchaseContext | null | undefined,
+  listedPriceForId: (id: number) => number | undefined,
+  marketPriceForId: (id: number) => number,
+): number | null {
+  if (!team || !isGrandfatheredPricingTeam(team) || team.players.length === 0) return null;
+  return squadSpendForTeam(team, listedPriceForId, marketPriceForId);
+}
+
+/** Draft/save budget: personal saved spend for original squads, else league dynamic cap. */
+export function draftBudgetForTeam(
+  leagueBudget: number,
+  team: TeamPurchaseContext | null | undefined,
+  listedPriceForId: (id: number) => number | undefined,
+  marketPriceForId: (id: number) => number,
+): number {
+  return personalSpendCapForTeam(team, listedPriceForId, marketPriceForId) ?? leagueBudget;
 }
 
 /** Draft spend: kept picks use stored/original price; new picks use current market price. */

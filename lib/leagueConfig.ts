@@ -63,9 +63,9 @@ export const ROLE_LABEL: Record<PlayerRole, string> = {
 /** How many player changes count as “free” each gameweek before penalties apply. */
 export const FREE_TRANSFERS_PER_WEEK = 2;
 /**
- * Max unused free transfers banked on top of the weekly allowance (2 + 2 banked → 4 usable in one GW).
+ * Max unused free transfers banked on top of the weekly allowance (2 + 1 banked → 3 usable in one GW).
  */
-export const MAX_BANKED_FREE_TRANSFERS = 2;
+export const MAX_BANKED_FREE_TRANSFERS = 1;
 /**
  * League points deducted from the team for each transfer beyond the free allowance.
  * Change this single value when the committee settles on a number.

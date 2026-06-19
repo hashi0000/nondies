@@ -8,6 +8,16 @@ import {
 /** Max free transfers you can have available in one gameweek (weekly free + bank cap). */
 export const MAX_FREE_TRANSFERS_IN_GW = FREE_TRANSFERS_PER_WEEK + MAX_BANKED_FREE_TRANSFERS;
 
+/** Human-readable allowance, e.g. "2 per gameweek (+1 banked)". */
+export function transferPolicySummary(): string {
+  return `${FREE_TRANSFERS_PER_WEEK} per gameweek (+${MAX_BANKED_FREE_TRANSFERS} banked)`;
+}
+
+/** How many of the current allowance came from last week's unused free(s). */
+export function bankedFreeTransfersInAllowance(allowance: number): number {
+  return Math.max(0, Math.min(allowance - FREE_TRANSFERS_PER_WEEK, MAX_BANKED_FREE_TRANSFERS));
+}
+
 /** Free allowance at GW start — never below the current weekly free (policy bumps apply immediately). */
 export function resolveFreeTransfersAtGwStart(stored: number | undefined | null): number {
   if (typeof stored === "number" && Number.isFinite(stored)) {
@@ -41,10 +51,10 @@ export function penaltyPointsForExtras(extras: number): number {
   return extras * POINTS_PER_EXTRA_TRANSFER;
 }
 
-/** Free allowance for the next gameweek after rollover. */
+/** Free allowance for the next gameweek after rollover — at most +1 banked from unused frees. */
 export function freeTransfersAfterRollover(unusedFreesFromPriorGw: number): number {
-  const unused = Math.max(0, unusedFreesFromPriorGw);
-  return Math.min(unused + FREE_TRANSFERS_PER_WEEK, MAX_FREE_TRANSFERS_IN_GW);
+  const banked = Math.min(Math.max(0, unusedFreesFromPriorGw), MAX_BANKED_FREE_TRANSFERS);
+  return FREE_TRANSFERS_PER_WEEK + banked;
 }
 
 /** League-wide amnesty: unlimited player changes for one gameweek (stored on gameState/current). */

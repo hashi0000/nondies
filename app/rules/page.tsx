@@ -26,6 +26,7 @@ import {
 } from "@/lib/fantasyPoints";
 import { POOL_PRICE_BAND } from "@/lib/dynamicPricing";
 import { GRANDFATHERED_SQUAD_MESSAGE } from "@/lib/squadPurchasePrices";
+import { transferPolicySummary } from "@/lib/transfers";
 
 export const metadata = {
   title: "How to Play — Nondies Fantasy League",
@@ -156,8 +157,7 @@ export default function RulesPage() {
             Tags <strong className="text-zinc-200">1st XI</strong> / <strong className="text-zinc-200">2nd XI</strong> are filters only — a hot 2nd XI pick can cost as much as anyone.
             Assign captain, vice-captain and wicketkeeper, save to Firebase, and earn points from stats the admin records each gameweek.{" "}
             <strong className="text-zinc-300">Transfers:</strong>{" "}
-            <strong className="text-zinc-200">{FREE_TRANSFERS_PER_WEEK}</strong> free changes per gameweek (up to{" "}
-            <strong className="text-zinc-200">{MAX_BANKED_FREE_TRANSFERS}</strong> banked, max{" "}
+            <strong className="text-zinc-200">{transferPolicySummary()}</strong> (max{" "}
             <strong className="text-zinc-200">{FREE_TRANSFERS_PER_WEEK + MAX_BANKED_FREE_TRANSFERS}</strong> in one GW); each extra change costs{" "}
             <strong className="text-zinc-200">−{POINTS_PER_EXTRA_TRANSFER}</strong> league points — see{" "}
             <a href="#transfers" className="font-medium text-red-400 underline decoration-red-500/50 underline-offset-2 hover:text-red-300">Transfers</a> below.
@@ -242,8 +242,8 @@ export default function RulesPage() {
                   <ul className="grid gap-2 text-sm text-zinc-300 list-disc pl-4">
                     <li>
                       <strong className="text-white">Transfer allowance (league defaults):</strong>{" "}
-                      <strong className="text-white">{FREE_TRANSFERS_PER_WEEK}</strong> free player changes per gameweek. Unused free transfers roll over so you can have up to{" "}
-                      <strong className="text-white">{MAX_BANKED_FREE_TRANSFERS}</strong> banked for a busy week (max{" "}
+                      <strong className="text-white">{transferPolicySummary()}</strong>. Unused free transfers roll over — at most{" "}
+                      <strong className="text-white">+{MAX_BANKED_FREE_TRANSFERS} banked</strong> into the next week (max{" "}
                       <strong className="text-white">{FREE_TRANSFERS_PER_WEEK + MAX_BANKED_FREE_TRANSFERS}</strong> free in one GW). Each change beyond that costs{" "}
                       <strong className="text-white">{POINTS_PER_EXTRA_TRANSFER} points</strong> off your league total (committee can retune anytime in{" "}
                       <code className="rounded bg-black/40 px-1 font-mono text-[11px] text-zinc-200">lib/leagueConfig.ts</code> as <code className="rounded bg-black/40 px-1 font-mono text-[11px]">POINTS_PER_EXTRA_TRANSFER</code>).
@@ -400,9 +400,9 @@ export default function RulesPage() {
                   <li className="flex gap-3">
                     <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-red-500/80" aria-hidden />
                     <span>
-                      <strong className="text-white">{FREE_TRANSFERS_PER_WEEK} free transfers</strong> per gameweek. Unused frees can{" "}
-                      <strong className="text-white">bank</strong> up to <strong className="text-white">{MAX_BANKED_FREE_TRANSFERS}</strong> for later weeks (max{" "}
-                      <strong className="text-white">{FREE_TRANSFERS_PER_WEEK + MAX_BANKED_FREE_TRANSFERS}</strong> free in one GW — they do not stack beyond that cap).
+                      <strong className="text-white">{transferPolicySummary()}</strong>. Unused frees carry as{" "}
+                      <strong className="text-white">+{MAX_BANKED_FREE_TRANSFERS} banked</strong> max (up to{" "}
+                      <strong className="text-white">{FREE_TRANSFERS_PER_WEEK + MAX_BANKED_FREE_TRANSFERS}</strong> free in one GW — no further stacking).
                     </span>
                   </li>
                   <li className="flex gap-3">

@@ -71,6 +71,8 @@ import {
   pricingAmnestyPavilionMessage,
   resolveFreeTransfersAtGwStart,
   transferExtrasAgainstFree,
+  transferPolicySummary,
+  bankedFreeTransfersInAllowance,
 } from "@/lib/transfers";
 import { normalizePlayCricketName } from "@/lib/playCricket/names";
 import {
@@ -1542,8 +1544,15 @@ function TransferImpactPanel({
         </p>
         {freeAtLock != null ? (
           <p className="mt-2 text-xs text-zinc-400">
-            Free transfers available this gameweek: <strong className="text-white">{freeAtLock}</strong>
-            <span className="text-zinc-500"> (max {MAX_FREE_TRANSFERS_IN_GW} in one GW)</span>
+            Free transfers available: <strong className="text-white">{freeAtLock}</strong>
+            <span className="text-zinc-500">
+              {" "}
+              ({transferPolicySummary()}
+              {bankedFreeTransfersInAllowance(freeAtLock) > 0
+                ? ` — ${FREE_TRANSFERS_PER_WEEK} weekly + ${bankedFreeTransfersInAllowance(freeAtLock)} banked`
+                : ""}
+              , max {MAX_FREE_TRANSFERS_IN_GW} in one GW)
+            </span>
           </p>
         ) : null}
       </div>
@@ -1612,6 +1621,18 @@ function TransferImpactPanel({
       </div>
 
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <div className="rounded-lg bg-black/25 px-3 py-2 ring-1 ring-white/10 sm:col-span-2">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Allowance</div>
+          <div className="mt-0.5 text-sm text-zinc-200">
+            {transferPolicySummary()}
+            {bankedFreeTransfersInAllowance(preview.F) > 0 ? (
+              <span className="text-zinc-400">
+                {" "}
+                · this GW: {FREE_TRANSFERS_PER_WEEK} weekly + {bankedFreeTransfersInAllowance(preview.F)} banked
+              </span>
+            ) : null}
+          </div>
+        </div>
         <div className="rounded-lg bg-black/25 px-3 py-2 ring-1 ring-white/10">
           <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Player changes</div>
           <div className="mt-0.5 text-lg font-bold tabular-nums text-white">{preview.T}</div>
@@ -5429,9 +5450,8 @@ export default function Page() {
                       <div className="rounded-xl bg-white/[0.04] px-4 py-3 text-xs leading-relaxed text-zinc-400 ring-1 ring-white/10">
                         <span className="font-semibold text-zinc-200">Transfer policy</span> (enforced on save; rollover on End GW):{" "}
                         <strong className="text-zinc-300">GW1 pre-lock = unlimited free changes</strong>, then{" "}
-                        <strong className="text-zinc-300">{FREE_TRANSFERS_PER_WEEK}</strong> free player changes per gameweek, up to{" "}
-                        <strong className="text-zinc-300">{MAX_BANKED_FREE_TRANSFERS}</strong> banked, max{" "}
-                        <strong className="text-zinc-300">{MAX_FREE_TRANSFERS_IN_GW}</strong> free in hand, then{" "}
+                        <strong className="text-zinc-300">{transferPolicySummary()}</strong>, max{" "}
+                        <strong className="text-zinc-300">{MAX_FREE_TRANSFERS_IN_GW}</strong> in hand, then{" "}
                         <strong className="text-zinc-300">−{POINTS_PER_EXTRA_TRANSFER}</strong> league points per extra change. Tunables in{" "}
                         <code className="rounded bg-black/30 px-1 font-mono text-[11px] text-zinc-300">lib/leagueConfig.ts</code>.
                       </div>

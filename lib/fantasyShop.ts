@@ -163,3 +163,110 @@ export function hasConflictingActiveBooster(
 export function formatFantasyPoints(n: number): string {
   return `${Math.round(n)} FP`;
 }
+
+/** Persisted on `teams/{uid}.fantasyShop` in Firestore. */
+export type TeamFantasyShopState = {
+  ownedItemIds: ShopItemId[];
+  activeItemIds: ShopItemId[];
+  activeGameweek: number;
+  purchaseHistory: ShopPurchaseRecord[];
+};
+
+const SHOP_ITEM_ID_SET = new Set<string>(SHOP_ITEMS.map((item) => item.id));
+
+function filterShopItemIds(raw: unknown, fallback: ShopItemId[]): ShopItemId[] {
+  if (!Array.isArray(raw)) return fallback;
+  const ids = raw.filter((x): x is ShopItemId => typeof x === "string" && SHOP_ITEM_ID_SET.has(x));
+  return ids.length ? [...new Set(ids)] : fallback;
+}
+
+function parsePurchaseHistory(raw: unknown): ShopPurchaseRecord[] {
+  if (!Array.isArray(raw)) return [];
+  const rows: ShopPurchaseRecord[] = [];
+  for (const row of raw) {
+    if (!row || typeof row !== "object") continue;
+    const o = row as Record<string, unknown>;
+    const itemId = typeof o.itemId === "string" && SHOP_ITEM_ID_SET.has(o.itemId) ? (o.itemId as ShopItemId) : null;
+    if (!itemId) continue;
+    rows.push({
+      id: String(o.id ?? `${Date.now()}-${itemId}`),
+      itemId,
+      itemName: String(o.itemName ?? shopItemById(itemId)?.name ?? itemId),
+      cost: Number(o.cost ?? 0),
+      purchasedAt: String(o.purchasedAt ?? new Date().toISOString()),
+      gameweek: o.gameweek != null ? Number(o.gameweek) : undefined,
+    });
+  }
+  return rows;
+}
+
+export function emptyTeamFantasyShop(gameweek: number): TeamFantasyShopState {
+  return {
+    ownedItemIds: ["powerplay"],
+    activeItemIds: ["powerplay"],
+    activeGameweek: gameweek,
+    purchaseHistory: [],
+  };
+}
+
+export function parseTeamFantasyShop(raw: unknown, currentGameweek: number): TeamFantasyShopState {
+  if (!raw || typeof raw !== "object") return emptyTeamFantasyShop(currentGameweek);
+  const o = raw as Record<string, unknown>;
+  const storedGw = Number(o.activeGameweek);
+  const ownedItemIds = filterShopItemIds(o.ownedItemIds, ["powerplay"]);
+  let activeItemIds = filterShopItemIds(o.activeItemIds, ["powerplay"]);
+  if (!Number.isFinite(storedGw) || storedGw !== currentGameweek) {
+    activeItemIds = ["powerplay"];
+  }
+  return {
+    ownedItemIds: ownedItemIds.includes("powerplay") ? ownedItemIds : (["powerplay", ...ownedItemIds] as ShopItemId[]),
+    activeItemIds,
+    activeGameweek: currentGameweek,
+    purchaseHistory: parsePurchaseHistory(o.purchaseHistory),
+  };
+}
+
+export function shopWalletFromTeam(cumulativePoints: number, shop: TeamFantasyShopState): ShopWalletState {
+  return {
+    balance: Math.max(0, Math.round(cumulativePoints)),
+    ownedItemIds: shop.ownedItemIds,
+    activeItemIds: shop.activeItemIds,
+    purchaseHistory: shop.purchaseHistory,
+  };
+}
+
+export function buildTeamFantasyShopAfterPurchase(args: {
+  shop: TeamFantasyShopState;
+  item: ShopItem;
+  gameweek: number;
+  alreadyOwned: boolean;
+}): TeamFantasyShopState {
+  const { shop, item, gameweek, alreadyOwned } = args;
+  const cost = alreadyOwned ? 0 : item.cost;
+  const record: ShopPurchaseRecord = {
+    id: `${Date.now()}-${item.id}`,
+    itemId: item.id,
+    itemName: item.name,
+    cost,
+    purchasedAt: new Date().toISOString(),
+    gameweek,
+  };
+
+  const ownedItemIds = shop.ownedItemIds.includes(item.id) ? shop.ownedItemIds : [...shop.ownedItemIds, item.id];
+
+  let activeItemIds = [...shop.activeItemIds];
+  if (isPaidBooster(item)) {
+    activeItemIds = activeItemIds.filter((id) => {
+      const active = shopItemById(id);
+      return !active || !isPaidBooster(active) || id === "powerplay";
+    });
+  }
+  if (!activeItemIds.includes(item.id)) activeItemIds.push(item.id);
+
+  return {
+    ownedItemIds,
+    activeItemIds,
+    activeGameweek: gameweek,
+    purchaseHistory: [record, ...shop.purchaseHistory].slice(0, 100),
+  };
+}

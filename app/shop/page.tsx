@@ -14,22 +14,40 @@ import {
   Zap,
 } from "lucide-react";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { collection, doc, onSnapshot } from "firebase/firestore";
+import { collection, doc, onSnapshot, updateDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
+import { ActivePerksSummary } from "@/components/ActivePerksSummary";
 import {
+  buildTeamFantasyShopAfterPurchase,
   formatFantasyPoints,
   hasConflictingActiveBooster,
   isPaidBooster,
+  parseTeamFantasyShop,
   SHOP_ITEMS,
   SHOP_PLANNED_RULES,
-  shopItemById,
+  shopWalletFromTeam,
   type ShopItem,
-  type ShopItemId,
-  type ShopPurchaseRecord,
-  type ShopWalletState,
+  type TeamFantasyShopState,
 } from "@/lib/fantasyShop";
+import {
+  parsePlayerStatLine,
+  totalEarnedFantasyPoints,
+  type PointsTeam,
+} from "@/lib/teamFantasyPoints";
+import type { FantasyStatLine } from "@/lib/fantasyPoints";
 
 const APP_NAME = "Nondies Fantasy League";
+
+type ShopPlayer = { id: number; name: string; role?: string };
+
+type SavedSquad = {
+  name: string;
+  players: number[];
+  captain: number | null;
+  viceCaptain: number | null;
+  keeper: number | null;
+  playerJoinedGameweek?: Record<string, number>;
+};
 
 const CATEGORY_LABEL: Record<ShopItem["category"], string> = {
   batting: "Batting",
@@ -47,13 +65,11 @@ const CATEGORY_ACCENT: Record<ShopItem["category"], string> = {
   utility: "border-emerald-500/35 bg-emerald-500/10 ring-emerald-500/25",
 };
 
-function emptyWallet(balance: number): ShopWalletState {
-  return {
-    balance,
-    ownedItemIds: ["powerplay"],
-    activeItemIds: ["powerplay"],
-    purchaseHistory: [],
-  };
+function itemStatusLabel(item: ShopItem, owned: boolean, active: boolean): string {
+  if (item.alwaysActive) return "Included — free for everyone";
+  if (active) return "Active this gameweek";
+  if (owned) return "Owned — not active this GW";
+  return "Not owned";
 }
 
 function ShopItemCard({
@@ -106,6 +122,19 @@ function ShopItemCard({
       </div>
 
       <p className="mt-3 flex-1 text-sm leading-relaxed text-zinc-300">{item.description}</p>
+
+      <div className="mt-3 rounded-lg bg-black/25 px-3 py-2 text-xs ring-1 ring-white/10">
+        <span className="font-semibold text-zinc-400">Status: </span>
+        <span className="text-zinc-100">{itemStatusLabel(item, owned, active)}</span>
+        {!item.alwaysFree && !item.alwaysActive ? (
+          <>
+            <span className="mx-2 text-zinc-600">·</span>
+            <span className={canAfford ? "font-semibold text-emerald-300" : "font-semibold text-red-300"}>
+              {canAfford ? "Enough FP" : `Need ${formatFantasyPoints(item.cost - balance)} more`}
+            </span>
+          </>
+        ) : null}
+      </div>
 
       <div className="mt-4 flex flex-wrap gap-2">
         {item.alwaysActive ? (
@@ -180,9 +209,14 @@ export default function FantasyShopPage() {
   const [authReady, setAuthReady] = useState(false);
   const [leagueBalance, setLeagueBalance] = useState(0);
   const [currentGameweek, setCurrentGameweek] = useState(1);
-  const [wallet, setWallet] = useState<ShopWalletState | null>(null);
+  const [teamShop, setTeamShop] = useState<TeamFantasyShopState | null>(null);
+  const [hasTeamDoc, setHasTeamDoc] = useState(false);
   const [pendingItem, setPendingItem] = useState<ShopItem | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [buying, setBuying] = useState(false);
+  const [savedSquad, setSavedSquad] = useState<SavedSquad | null>(null);
+  const [playersById, setPlayersById] = useState<Map<number, ShopPlayer>>(new Map());
+  const [playerStatsById, setPlayerStatsById] = useState<Map<number, FantasyStatLine>>(new Map());
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -200,27 +234,94 @@ export default function FantasyShopPage() {
       setCurrentGameweek(snap.exists() ? Number(snap.data()?.currentGameweek ?? 1) : 1);
     });
     const unsubTeam = onSnapshot(doc(db, "teams", authUser.uid), (snap) => {
+      setHasTeamDoc(snap.exists());
       const pts = snap.exists() ? Number(snap.data()?.cumulativePoints ?? 0) : 0;
       setLeagueBalance(Number.isFinite(pts) ? Math.round(pts) : 0);
+      if (snap.exists()) {
+        const data = snap.data();
+        setTeamShop(parseTeamFantasyShop(data?.fantasyShop, currentGameweek));
+        setSavedSquad({
+          name: String(data?.name ?? "My team"),
+          players: Array.isArray(data?.players)
+            ? data.players.map((x: unknown) => Number(x)).filter((n: number) => Number.isFinite(n))
+            : [],
+          captain: data?.captain != null ? Number(data.captain) : null,
+          viceCaptain: data?.viceCaptain != null ? Number(data.viceCaptain) : null,
+          keeper: data?.keeper != null ? Number(data.keeper) : null,
+          playerJoinedGameweek:
+            data?.playerJoinedGameweek && typeof data.playerJoinedGameweek === "object"
+              ? (data.playerJoinedGameweek as Record<string, number>)
+              : undefined,
+        });
+      } else {
+        setSavedSquad(null);
+        setTeamShop(null);
+      }
+    });
+    const unsubPlayers = onSnapshot(collection(db, "players"), (snap) => {
+      const map = new Map<number, ShopPlayer>();
+      const stats = new Map<number, FantasyStatLine>();
+      for (const d of snap.docs) {
+        const data = d.data();
+        const id = Number(data.id ?? d.id);
+        if (!Number.isFinite(id)) continue;
+        map.set(id, { id, name: String(data.name ?? `Player ${id}`), role: data.role ? String(data.role) : undefined });
+        stats.set(id, parsePlayerStatLine(data as Record<string, unknown>));
+      }
+      setPlayersById(map);
+      setPlayerStatsById(stats);
     });
     return () => {
       unsubGs();
       unsubTeam();
+      unsubPlayers();
     };
-  }, [authUser]);
+  }, [authUser, currentGameweek]);
 
-  useEffect(() => {
-    if (wallet == null) {
-      setWallet(emptyWallet(leagueBalance));
-    }
-  }, [leagueBalance, wallet]);
+  const pointsTeam = useMemo((): PointsTeam | null => {
+    if (!savedSquad) return null;
+    return {
+      players: savedSquad.players,
+      captain: savedSquad.captain,
+      viceCaptain: savedSquad.viceCaptain,
+      cumulativePoints: leagueBalance,
+      playerJoinedGameweek: savedSquad.playerJoinedGameweek,
+    };
+  }, [savedSquad, leagueBalance]);
 
-  const displayBalance = wallet?.balance ?? leagueBalance;
+  const spendableBalance = useMemo(() => {
+    if (!pointsTeam || pointsTeam.players.length === 0) return leagueBalance;
+    return totalEarnedFantasyPoints(pointsTeam, playerStatsById, currentGameweek);
+  }, [pointsTeam, playerStatsById, currentGameweek, leagueBalance]);
+
+  const wallet = useMemo(() => {
+    if (!teamShop) return null;
+    const base = shopWalletFromTeam(spendableBalance, teamShop);
+    return { ...base, balance: spendableBalance };
+  }, [teamShop, spendableBalance]);
+
+  const displayBalance = spendableBalance;
 
   const sortedItems = useMemo(
     () => [...SHOP_ITEMS].sort((a, b) => a.cost - b.cost || a.name.localeCompare(b.name)),
     [],
   );
+
+  const squadRows = useMemo(() => {
+    if (!savedSquad?.players.length) return [];
+    return savedSquad.players
+      .map((id) => {
+        const player = playersById.get(id);
+        return {
+          id,
+          name: player?.name ?? `Player ${id}`,
+          isCaptain: savedSquad.captain === id,
+          isVice: savedSquad.viceCaptain === id,
+          isKeeper: savedSquad.keeper === id,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [savedSquad, playersById]);
 
   function requestPurchase(item: ShopItem) {
     setNotice(null);
@@ -228,8 +329,8 @@ export default function FantasyShopPage() {
     if (!wallet) return;
 
     const alreadyOwned = wallet.ownedItemIds.includes(item.id);
-    if (!alreadyOwned && wallet.balance < item.cost) {
-      setNotice(`Not enough Fantasy Points — you need ${formatFantasyPoints(item.cost)}.`);
+    if (!alreadyOwned && spendableBalance < item.cost) {
+      setNotice(`Not enough Fantasy Points — you need ${formatFantasyPoints(item.cost)} (you have ${formatFantasyPoints(spendableBalance)}).`);
       return;
     }
 
@@ -242,47 +343,44 @@ export default function FantasyShopPage() {
     setPendingItem(item);
   }
 
-  function confirmPurchase() {
-    if (!pendingItem || !wallet) return;
+  async function confirmPurchase() {
+    if (!pendingItem || !wallet || !teamShop || !authUser) return;
     const item = pendingItem;
     const alreadyOwned = wallet.ownedItemIds.includes(item.id);
     const cost = alreadyOwned ? 0 : item.cost;
-    if (!alreadyOwned && wallet.balance < cost) return;
-
-    const record: ShopPurchaseRecord = {
-      id: `${Date.now()}-${item.id}`,
-      itemId: item.id,
-      itemName: item.name,
-      cost,
-      purchasedAt: new Date().toISOString(),
-      gameweek: currentGameweek,
-    };
-
-    const ownedItemIds = wallet.ownedItemIds.includes(item.id)
-      ? wallet.ownedItemIds
-      : [...wallet.ownedItemIds, item.id];
-
-    let activeItemIds = [...wallet.activeItemIds];
-    if (isPaidBooster(item)) {
-      activeItemIds = activeItemIds.filter((id) => {
-        const active = shopItemById(id);
-        return !active || !isPaidBooster(active) || id === "powerplay";
-      });
+    if (!alreadyOwned && spendableBalance < cost) return;
+    if (!hasTeamDoc) {
+      setNotice("Save your squad in Draft first before spending Fantasy Points.");
+      return;
     }
-    if (!activeItemIds.includes(item.id)) activeItemIds.push(item.id);
 
-    setWallet({
-      balance: wallet.balance - cost,
-      ownedItemIds,
-      activeItemIds,
-      purchaseHistory: [record, ...wallet.purchaseHistory],
+    const nextShop = buildTeamFantasyShopAfterPurchase({
+      shop: teamShop,
+      item,
+      gameweek: currentGameweek,
+      alreadyOwned,
     });
-    setPendingItem(null);
-    setNotice(
-      alreadyOwned
-        ? `${item.name} activated for GW${currentGameweek} — UI preview only.`
-        : `${item.name} purchased — UI preview only (game logic not wired yet).`,
-    );
+    const nextBalance = Math.max(0, leagueBalance - cost);
+
+    setBuying(true);
+    setNotice(null);
+    try {
+      await updateDoc(doc(db, "teams", authUser.uid), {
+        cumulativePoints: nextBalance,
+        fantasyShop: nextShop,
+      });
+      setPendingItem(null);
+      setNotice(
+        alreadyOwned
+          ? `${item.name} activated for GW${currentGameweek}.`
+          : `${item.name} purchased — ${formatFantasyPoints(cost)} deducted from your league total.`,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Purchase failed.";
+      setNotice(`Could not complete purchase: ${msg}`);
+    } finally {
+      setBuying(false);
+    }
   }
 
   if (!authReady || !authUser) {
@@ -336,7 +434,8 @@ export default function FantasyShopPage() {
                 </div>
                 <div className="mt-1 text-3xl font-bold tabular-nums text-white">{formatFantasyPoints(displayBalance)}</div>
                 <p className="mt-1 text-xs text-zinc-400">
-                  Preview balance from your league total (GW{currentGameweek}). Wallet &amp; scoring hooks coming later.
+                  Your league total for GW{currentGameweek} — completed gameweeks plus this week&apos;s live squad score.
+                  Purchases deduct from your team total on the leaderboard.
                 </p>
               </div>
             </div>
@@ -345,9 +444,60 @@ export default function FantasyShopPage() {
                 <Sparkles className="h-4 w-4 text-amber-300" />
                 Spend FP on power-ups
               </div>
-              <p className="mt-1 text-xs text-zinc-400">Purchases below are UI-only until game logic is connected.</p>
+              <p className="mt-1 text-xs text-zinc-400">Buy power-ups with points you&apos;ve earned this season.</p>
             </div>
           </div>
+        </section>
+
+        <ActivePerksSummary
+          className="mt-5"
+          activeItemIds={wallet?.activeItemIds ?? ["powerplay"]}
+          gameweek={currentGameweek}
+        />
+
+        <section className="mt-5 rounded-2xl border border-white/10 bg-zinc-900/50 p-5 ring-1 ring-white/10">
+          <div className="text-sm font-semibold text-white">Your saved squad</div>
+          <p className="mt-1 text-xs text-zinc-500">
+            Boosters like Lucky Dip and captain chips apply to these players when game logic is connected.
+          </p>
+          {squadRows.length > 0 ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {squadRows.map((row) => (
+                <div
+                  key={row.id}
+                  className="inline-flex items-center gap-2 rounded-xl bg-black/30 px-3 py-2 text-sm ring-1 ring-white/10"
+                >
+                  <span className="font-medium text-zinc-100">{row.name}</span>
+                  <span className="flex gap-1">
+                    {row.isCaptain ? (
+                      <span className="rounded bg-red-600/30 px-1.5 py-0.5 text-[10px] font-bold text-red-100 ring-1 ring-red-500/40">
+                        C
+                      </span>
+                    ) : null}
+                    {row.isVice ? (
+                      <span className="rounded bg-amber-600/30 px-1.5 py-0.5 text-[10px] font-bold text-amber-100 ring-1 ring-amber-500/40">
+                        VC
+                      </span>
+                    ) : null}
+                    {row.isKeeper ? (
+                      <span className="rounded bg-sky-600/30 px-1.5 py-0.5 text-[10px] font-bold text-sky-100 ring-1 ring-sky-500/40">
+                        WK
+                      </span>
+                    ) : null}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-4 text-sm text-zinc-500">
+              No saved squad yet — pick your 7 in Draft before buying squad boosters.
+            </p>
+          )}
+          {savedSquad?.name ? (
+            <p className="mt-3 text-xs text-zinc-500">
+              Team: <span className="text-zinc-300">{savedSquad.name}</span>
+            </p>
+          ) : null}
         </section>
 
         {notice ? (
@@ -393,7 +543,7 @@ export default function FantasyShopPage() {
               <History className="h-4 w-4 text-zinc-400" />
               Purchase history
             </div>
-            <p className="mt-1 text-xs text-zinc-500">Session preview — will persist to Firebase when game logic ships.</p>
+            <p className="mt-1 text-xs text-zinc-500">Saved to your team — synced across devices.</p>
             {wallet && wallet.purchaseHistory.length > 0 ? (
               <ul className="mt-4 max-h-64 space-y-2 overflow-y-auto">
                 {wallet.purchaseHistory.map((row) => (
@@ -450,19 +600,23 @@ export default function FantasyShopPage() {
             </p>
             <p className="mt-2 text-xs text-zinc-500">{pendingItem.description}</p>
             <p className="mt-3 text-xs text-amber-200/90">
-              This is a UI preview only — no league scoring or transfers will change yet.
+              {wallet?.ownedItemIds.includes(pendingItem.id)
+                ? "Re-activating an owned perk does not cost extra FP."
+                : `Your league total will drop by ${formatFantasyPoints(pendingItem.cost)}. Booster effects in scoring/transfers are not wired yet.`}
             </p>
             <div className="mt-5 flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={confirmPurchase}
-                className="flex-1 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-bold text-white ring-1 ring-red-500/50 hover:bg-red-500"
+                onClick={() => void confirmPurchase()}
+                disabled={buying}
+                className="flex-1 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-bold text-white ring-1 ring-red-500/50 hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {wallet?.ownedItemIds.includes(pendingItem.id) ? "Activate" : "Confirm"}
+                {buying ? "Processing…" : wallet?.ownedItemIds.includes(pendingItem.id) ? "Activate" : "Confirm"}
               </button>
               <button
                 type="button"
                 onClick={() => setPendingItem(null)}
+                disabled={buying}
                 className="flex-1 rounded-xl bg-white/10 px-4 py-2.5 text-sm font-semibold text-zinc-200 ring-1 ring-white/15 hover:bg-white/15"
               >
                 Cancel

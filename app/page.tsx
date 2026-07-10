@@ -23,6 +23,7 @@ import {
   Users,
   X,
   ShoppingBag,
+  Coins,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
@@ -47,8 +48,11 @@ import {
 } from "firebase/firestore";
 import { auth, db, firebaseProjectId } from "@/lib/firebase";
 import { PlayerCompareCharts } from "@/components/PlayerCompareCharts";
+import { ActivePerksSummary } from "@/components/ActivePerksSummary";
 import { appendPriceHistoryWeek, parsePriceHistory } from "@/lib/playerPriceHistory";
 import { calculatePoints, clampNonNegativeInt, fantasyPointsBreakdown } from "@/lib/fantasyPoints";
+import { parseTeamFantasyShop, type ShopItemId } from "@/lib/fantasyShop";
+import { totalEarnedFantasyPoints } from "@/lib/teamFantasyPoints";
 import {
   FREE_TRANSFERS_PER_WEEK,
   LINEUP_LOCK_HOUR,
@@ -393,6 +397,8 @@ type SavedTeam = {
   playerPurchasePrices?: PurchasePriceMap;
   /** Gameweek when this team was first saved (mid-season joiners get unlimited edits until that GW’s lineup lock). */
   firstSaveGameweek?: number;
+  /** Fantasy Shop — owned/active perks and purchase history. */
+  fantasyShop?: unknown;
   createdBy?: string;
   createdAt?: unknown;
 };
@@ -3036,6 +3042,38 @@ export default function Page() {
     [teams, authUser],
   );
 
+  const mySquadPlayerIds = useMemo(() => new Set(mySavedTeam?.players ?? []), [mySavedTeam?.players]);
+
+  const shopActiveItemIds = useMemo(() => {
+    if (!mySavedTeam) return ["powerplay"] as ShopItemId[];
+    return parseTeamFantasyShop(mySavedTeam.fantasyShop, currentGameweek).activeItemIds;
+  }, [mySavedTeam, currentGameweek]);
+
+  const spendableFantasyPoints = useMemo(() => {
+    if (!mySavedTeam || mySavedTeam.players.length === 0) {
+      return Math.round(mySavedTeam?.cumulativePoints ?? 0);
+    }
+    const statLines = new Map(
+      players.map((p) => [
+        p.id,
+        {
+          runs: p.runs,
+          fours: p.fours,
+          sixes: p.sixes,
+          wickets: p.wickets,
+          maidens: p.maidens,
+          catches: p.catches,
+          wkCatches: p.wkCatches,
+          stumpings: p.stumpings,
+          runOuts: p.runOuts,
+          didNotBat: p.didNotBat,
+          didNotPlay: p.didNotPlay,
+        },
+      ]),
+    );
+    return totalEarnedFantasyPoints(mySavedTeam, statLines, currentGameweek);
+  }, [mySavedTeam, players, currentGameweek]);
+
   const personalSpendCap = useMemo(
     () => personalSpendCapForTeam(mySavedTeam, listedPriceForId, marketPriceForId),
     [mySavedTeam, listedPriceForId, marketPriceForId],
@@ -4538,6 +4576,17 @@ export default function Page() {
                 {locked ? <Lock className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}
                 {locked ? `Locked (${formatLockTime(lockDate)})` : `Locks ${formatLockTime(lockDate)}`}
               </Pill>
+              <Link href="/shop" title="Fantasy Shop — spend earned league points">
+                <Pill tone="amber">
+                  <Coins className="h-3.5 w-3.5" />
+                  {spendableFantasyPoints} FP
+                </Pill>
+              </Link>
+              <ActivePerksSummary
+                activeItemIds={shopActiveItemIds}
+                gameweek={currentGameweek}
+                compact
+              />
             </div>
           </div>
           <div className="flex flex-wrap gap-2 sm:items-center sm:justify-end">
@@ -5377,7 +5426,27 @@ export default function Page() {
                             const seasonFantasy = seasonFantasyBreakdownFromHistory(p.history);
                             return (
                               <tr key={p.id}>
-                                <td className="sticky left-0 z-30 bg-zinc-950 px-4 py-3 font-semibold text-white shadow-[1px_0_0_0_rgba(255,255,255,0.06)]">{p.name}</td>
+                                <td className="sticky left-0 z-30 bg-zinc-950 px-4 py-3 font-semibold text-white shadow-[1px_0_0_0_rgba(255,255,255,0.06)]">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span>{p.name}</span>
+                                    {mySquadPlayerIds.has(p.id) ? (
+                                      <span className="inline-flex items-center gap-1">
+                                        <span className="rounded-full bg-red-600/25 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-100 ring-1 ring-red-500/35">
+                                          In squad
+                                        </span>
+                                        {mySavedTeam?.captain === p.id ? (
+                                          <span className="rounded bg-red-600/40 px-1.5 py-0.5 text-[10px] font-bold text-white">C</span>
+                                        ) : null}
+                                        {mySavedTeam?.viceCaptain === p.id ? (
+                                          <span className="rounded bg-amber-600/40 px-1.5 py-0.5 text-[10px] font-bold text-white">VC</span>
+                                        ) : null}
+                                        {mySavedTeam?.keeper === p.id ? (
+                                          <span className="rounded bg-sky-600/40 px-1.5 py-0.5 text-[10px] font-bold text-white">WK</span>
+                                        ) : null}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                </td>
                                 <td className="px-4 py-3 text-zinc-300">{ROLE_LABEL[p.role]}</td>
                                 <td className="px-4 py-3 text-zinc-300">{TEAM_TIER_SHORT[p.teamTier]}</td>
                                 <td className="px-4 py-3 text-right text-zinc-200">

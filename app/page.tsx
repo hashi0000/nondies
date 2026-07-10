@@ -22,6 +22,7 @@ import {
   MessageSquare,
   Users,
   X,
+  ShoppingBag,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
@@ -4543,6 +4544,12 @@ export default function Page() {
             <TabButton active={tab === "draft"} onClick={() => setTab("draft")} icon={<Shield className="h-4 w-4" />} label="Draft" />
             <TabButton active={tab === "leaderboard"} onClick={() => setTab("leaderboard")} icon={<Trophy className="h-4 w-4" />} label="Leaderboard" />
             <TabButton active={tab === "players"} onClick={() => setTab("players")} icon={<Users className="h-4 w-4" />} label="Players" />
+            <Link href="/shop"
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-600/15 px-3 py-2 text-sm font-medium text-amber-100 ring-1 ring-amber-500/35 transition hover:bg-amber-600/25 hover:text-white"
+              title="Fantasy Shop">
+              <ShoppingBag className="h-4 w-4" />
+              <span className="hidden sm:inline">Shop</span>
+            </Link>
             <TabButton active={tab === "admin"} onClick={() => setTab("admin")} icon={<Settings className="h-4 w-4" />} label="Admin" />
             <button type="button" onClick={() => void logout()}
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-white/5 px-3 py-2 text-sm font-medium text-zinc-300 ring-1 ring-white/10 hover:bg-white/10 hover:text-white transition"
@@ -6574,6 +6581,11 @@ export default function Page() {
           <TabButton active={tab === "draft"} onClick={() => setTab("draft")} icon={<Shield className="h-4 w-4" />} label="Draft" />
           <TabButton active={tab === "leaderboard"} onClick={() => setTab("leaderboard")} icon={<Trophy className="h-4 w-4" />} label="Leaderboard" />
           <TabButton active={tab === "players"} onClick={() => setTab("players")} icon={<Users className="h-4 w-4" />} label="Players" />
+          <Link href="/shop"
+            className="inline-flex flex-1 items-center justify-center gap-1 rounded-xl bg-amber-600/15 px-2 py-2 text-xs font-semibold text-amber-100 ring-1 ring-amber-500/35 transition hover:bg-amber-600/25">
+            <ShoppingBag className="h-4 w-4" />
+            Shop
+          </Link>
           <TabButton active={tab === "admin"} onClick={() => setTab("admin")} icon={<Settings className="h-4 w-4" />} label="Admin" />
           <Link href="/pavilion"
             className={[

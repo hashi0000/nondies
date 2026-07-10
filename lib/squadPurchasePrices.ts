@@ -107,6 +107,9 @@ export function resolveTeamPurchasePrices(
     const key = String(id);
     if (stored[key] != null) {
       result[key] = stored[key]!;
+    } else if (!isOriginalSeasonPick(id, team.playerJoinedGameweek)) {
+      // Mid-season transfer without stored price — use current market, not opening listed.
+      result[key] = marketPriceForId(id);
     } else {
       result[key] = inferLegacyPurchasePrice(id, listedPriceForId(id), team.playerJoinedGameweek);
     }
@@ -176,11 +179,18 @@ export function draftPurchasePricesForSelection(
       : {};
   for (const id of selected) {
     const key = String(id);
-    if (grandfathered && savedTeam?.players.includes(id) && savedPrices[key] != null) {
-      map[key] = savedPrices[key]!;
-    } else {
-      map[key] = marketPriceForId(id);
+    if (grandfathered && savedTeam?.players.includes(id)) {
+      const savedPrice = savedPrices[key];
+      if (savedPrice != null) {
+        map[key] = savedPrice;
+        continue;
+      }
+      if (!isOriginalSeasonPick(id, savedTeam.playerJoinedGameweek)) {
+        map[key] = marketPriceForId(id);
+        continue;
+      }
     }
+    map[key] = marketPriceForId(id);
   }
   return map;
 }
@@ -200,7 +210,11 @@ export function buildPurchasePricesAfterSave(args: {
     for (const id of existing.players) {
       const key = String(id);
       if (prevMap[key] != null) continue;
-      prevMap[key] = inferLegacyPurchasePrice(id, listedPriceForId(id), existing.playerJoinedGameweek);
+      if (!isOriginalSeasonPick(id, existing.playerJoinedGameweek)) {
+        prevMap[key] = marketPriceForId(id);
+      } else {
+        prevMap[key] = inferLegacyPurchasePrice(id, listedPriceForId(id), existing.playerJoinedGameweek);
+      }
     }
   }
 

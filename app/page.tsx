@@ -3079,6 +3079,8 @@ export default function Page() {
     [builder.selected, draftPurchasePrices, marketPriceForId],
   );
 
+  const budgetHeadroom = Math.max(0, draftBudget - spend);
+
   const validation = useMemo(
     () =>
       validateTeam({
@@ -4699,6 +4701,12 @@ export default function Page() {
                         <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-white/10">
                           <div className={["h-2 rounded-full", spend > draftBudget ? "bg-red-500" : "bg-red-600"].join(" ")} style={{ width: `${budgetPct}%` }} />
                         </div>
+                        {usesPersonalSpendCap ? (
+                          <p className="mt-2 text-xs text-zinc-500">
+                            {money(budgetHeadroom)} headroom · removals credit your{" "}
+                            <strong className="text-zinc-400">squad price</strong>, not the pool market price
+                          </p>
+                        ) : null}
                       </div>
                     </div>
 
@@ -4909,6 +4917,7 @@ export default function Page() {
                           const isC = builder.captain === p.id;
                           const isVC = builder.viceCaptain === p.id;
                           const isWK = builder.keeper === p.id;
+                          const squadPrice = priceForIdFromMap(p.id, draftPurchasePrices, marketPriceForId);
                           return (
                             <div key={p.id} className="px-4 py-3">
                               <div className="flex items-start justify-between gap-3">
@@ -4917,7 +4926,12 @@ export default function Page() {
                                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
                                     <Pill tone="amber">{ROLE_LABEL[p.role]}</Pill>
                                     <Pill tone={p.teamTier === 1 ? "blue" : "neutral"}>{TEAM_TIER_SHORT[p.teamTier]}</Pill>
-                                    <PriceWithForm price={p.price} basePrice={p.basePrice} priceDelta={p.priceDelta} />
+                                    <span className="font-semibold text-white">{money(squadPrice)} in squad</span>
+                                    {squadPrice !== p.price ? (
+                                      <span className="text-zinc-500">pool {money(p.price)}</span>
+                                    ) : (
+                                      <PriceWithForm price={p.price} basePrice={p.basePrice} priceDelta={p.priceDelta} />
+                                    )}
                                     {transferBaselineSet && !transferBaselineSet.has(p.id) ? (
                                       <Pill tone="green">Transfer in</Pill>
                                     ) : null}

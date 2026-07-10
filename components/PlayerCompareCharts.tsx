@@ -2,6 +2,13 @@
 
 import React, { useMemo, useState } from "react";
 import { LineChart } from "lucide-react";
+import { computeDynamicPricingMap } from "@/lib/dynamicPricing";
+import {
+  buildPlayerPriceSeries,
+  effectivePriceHistory,
+  isPriceCompareMetric,
+  weeksForPriceHistory,
+} from "@/lib/playerPriceHistory";
 import {
   buildPlayerSeries,
   COMPARE_METRIC_LABEL,
@@ -31,6 +38,10 @@ function niceMax(n: number): number {
   return step * mag;
 }
 
+function money(n: number): string {
+  return `£${Math.round(n)}`;
+}
+
 type PlayerCompareChartsProps = {
   players: PlayerForChart[];
   currentGameweek: number;
@@ -42,11 +53,14 @@ export function PlayerCompareCharts({ players, currentGameweek }: PlayerCompareC
   const [pickerOpen, setPickerOpen] = useState(false);
   const [search, setSearch] = useState("");
 
+  const pricingMap = useMemo(() => computeDynamicPricingMap(players), [players]);
+
   const playersWithData = useMemo(
     () =>
       players.filter(
         (p) =>
           (p.history?.length ?? 0) > 0 ||
+          (p.priceHistory?.length ?? 0) > 0 ||
           p.runs > 0 ||
           p.wickets > 0 ||
           p.catches > 0 ||
@@ -70,21 +84,41 @@ export function PlayerCompareCharts({ players, currentGameweek }: PlayerCompareC
       .map((x) => x.id);
   }, [playersWithData]);
 
-  const weeks = useMemo(
-    () => weeksForPlayers(playersWithData, currentGameweek),
-    [playersWithData, currentGameweek],
+  const pickedPlayers = useMemo(
+    () => playersWithData.filter((p) => selectedIds.includes(p.id)),
+    [playersWithData, selectedIds],
   );
 
+  const weeks = useMemo(() => {
+    const pool = pickedPlayers.length > 0 ? pickedPlayers : playersWithData;
+    if (isPriceCompareMetric(metric)) {
+      return weeksForPriceHistory(pool, currentGameweek);
+    }
+    return weeksForPlayers(playersWithData, currentGameweek);
+  }, [metric, playersWithData, pickedPlayers, currentGameweek]);
+
   const series = useMemo(() => {
-    const picked = playersWithData.filter((p) => selectedIds.includes(p.id));
-    return picked.map((p) => buildPlayerSeries(p, weeks, metric, currentGameweek));
-  }, [playersWithData, selectedIds, weeks, metric, currentGameweek]);
+    if (isPriceCompareMetric(metric)) {
+      return pickedPlayers.map((p) => {
+        const pr = pricingMap.get(p.id);
+        return buildPlayerPriceSeries(
+          p,
+          weeks,
+          metric,
+          currentGameweek,
+          pr?.effectivePrice ?? p.price,
+          pr?.basePrice ?? p.price,
+        );
+      });
+    }
+    return pickedPlayers.map((p) => buildPlayerSeries(p, weeks, metric, currentGameweek));
+  }, [pickedPlayers, weeks, metric, currentGameweek, pricingMap]);
 
   const chart = useMemo(() => {
     const plotW = CHART_W - PAD.l - PAD.r;
     const plotH = CHART_H - PAD.t - PAD.b;
     const allValues = series.flatMap((s) => s.points.map((pt) => pt.value));
-    const yMax = niceMax(Math.max(...allValues, 1));
+    const yMax = niceMax(Math.max(...allValues, isPriceCompareMetric(metric) ? 5 : 1));
     const yMin = 0;
 
     const xForWeek = (week: number) => {
@@ -112,7 +146,9 @@ export function PlayerCompareCharts({ players, currentGameweek }: PlayerCompareC
           stroke="#09090b"
           strokeWidth={1.5}
         >
-          <title>{`${s.name} · GW${pt.week}: ${pt.value}`}</title>
+          <title>
+            {`${s.name} · GW${pt.week}: ${isPriceCompareMetric(metric) ? money(pt.value) : pt.value}`}
+          </title>
         </circle>
       ));
       return (
@@ -124,7 +160,31 @@ export function PlayerCompareCharts({ players, currentGameweek }: PlayerCompareC
     });
 
     return { paths, yTicks, yForValue, xForWeek, yMax, plotW, plotH };
-  }, [series, weeks]);
+  }, [series, weeks, metric]);
+
+  const priceHistoryRows = useMemo(() => {
+    if (pickedPlayers.length === 0) return [];
+    const priceWeeks = weeksForPriceHistory(pickedPlayers, currentGameweek);
+    return priceWeeks.map((week) => {
+      const cells = pickedPlayers.map((p) => {
+        const pr = pricingMap.get(p.id);
+        if (week === currentGameweek) {
+          return {
+            playerId: p.id,
+            listed: pr?.basePrice ?? p.price,
+            draft: pr?.effectivePrice ?? p.price,
+          };
+        }
+        const rec = effectivePriceHistory(p).find((h) => h.week === week);
+        return {
+          playerId: p.id,
+          listed: rec?.listed ?? null,
+          draft: rec?.draft ?? null,
+        };
+      });
+      return { week, cells };
+    });
+  }, [pickedPlayers, currentGameweek, pricingMap]);
 
   const togglePlayer = (id: number) => {
     setSelectedIds((prev) => {
@@ -142,6 +202,7 @@ export function PlayerCompareCharts({ players, currentGameweek }: PlayerCompareC
   }, [playersWithData, search]);
 
   const noWeeks = weeks.length === 0;
+  const priceMetric = isPriceCompareMetric(metric);
 
   return (
     <div className="mb-6 rounded-2xl bg-white/5 p-4 ring-1 ring-white/10 sm:p-5">
@@ -153,7 +214,7 @@ export function PlayerCompareCharts({ players, currentGameweek }: PlayerCompareC
           <div>
             <h3 className="text-sm font-semibold text-white">Compare form</h3>
             <p className="mt-0.5 text-xs text-zinc-400">
-              Pick up to {MAX_COMPARE} players and track gameweek trends. Includes the current GW when stats are on the board.
+              Pick up to {MAX_COMPARE} players — stats per GW, or draft/listed price history. Prices are snapshotted when the admin ends each gameweek.
             </p>
           </div>
         </div>
@@ -164,11 +225,17 @@ export function PlayerCompareCharts({ players, currentGameweek }: PlayerCompareC
             className="rounded-xl bg-zinc-950/80 px-3 py-2 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-red-500/60"
             aria-label="Chart metric"
           >
-            {(Object.keys(COMPARE_METRIC_LABEL) as CompareMetric[]).map((k) => (
-              <option key={k} value={k}>
-                {COMPARE_METRIC_LABEL[k]}
-              </option>
-            ))}
+            <optgroup label="Performance">
+              {(["points", "cumulative", "runs", "wickets", "batting", "bowling"] as CompareMetric[]).map((k) => (
+                <option key={k} value={k}>
+                  {COMPARE_METRIC_LABEL[k]}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="Price history">
+              <option value="draftPrice">{COMPARE_METRIC_LABEL.draftPrice}</option>
+              <option value="listedPrice">{COMPARE_METRIC_LABEL.listedPrice}</option>
+            </optgroup>
           </select>
           <button
             type="button"
@@ -252,7 +319,11 @@ export function PlayerCompareCharts({ players, currentGameweek }: PlayerCompareC
 
       <div className="mt-4 overflow-x-auto">
         {noWeeks ? (
-          <p className="py-8 text-center text-sm text-zinc-500">No completed gameweeks yet — charts appear after GW stats are saved.</p>
+          <p className="py-8 text-center text-sm text-zinc-500">
+            {priceMetric
+              ? "No price history yet — listed/draft prices are recorded each time the admin ends a gameweek."
+              : "No completed gameweeks yet — charts appear after GW stats are saved."}
+          </p>
         ) : selectedIds.length === 0 ? (
           <p className="py-8 text-center text-sm text-zinc-500">Select players above to draw the comparison chart.</p>
         ) : (
@@ -260,7 +331,7 @@ export function PlayerCompareCharts({ players, currentGameweek }: PlayerCompareC
             viewBox={`0 0 ${CHART_W} ${CHART_H}`}
             className="mx-auto w-full min-w-[320px] max-w-4xl"
             role="img"
-            aria-label="Player performance comparison chart"
+            aria-label="Player comparison chart"
           >
             {chart.yTicks.map((tick) => {
               const y = chart.yForValue(tick);
@@ -268,7 +339,7 @@ export function PlayerCompareCharts({ players, currentGameweek }: PlayerCompareC
                 <g key={tick}>
                   <line x1={PAD.l} x2={CHART_W - PAD.r} y1={y} y2={y} stroke="rgba(255,255,255,0.08)" />
                   <text x={PAD.l - 8} y={y + 4} textAnchor="end" className="fill-zinc-500 text-[10px]">
-                    {tick}
+                    {priceMetric ? money(tick) : tick}
                   </text>
                 </g>
               );
@@ -291,12 +362,63 @@ export function PlayerCompareCharts({ players, currentGameweek }: PlayerCompareC
             })}
             <text x={CHART_W / 2} y={CHART_H - 2} textAnchor="middle" className="fill-zinc-600 text-[9px]">
               {COMPARE_METRIC_LABEL[metric]}
-              {weeks.includes(currentGameweek) ? " · * = includes current gameweek (live stats)" : ""}
+              {!priceMetric && weeks.includes(currentGameweek) ? " · * = includes current gameweek (live stats)" : ""}
+              {priceMetric && weeks.includes(currentGameweek) ? " · * = live draft/listed price this GW" : ""}
             </text>
             {chart.paths}
           </svg>
         )}
       </div>
+
+      {pickedPlayers.length > 0 && priceHistoryRows.length > 0 ? (
+        <div className="mt-4 overflow-x-auto rounded-xl ring-1 ring-white/10">
+          <table className="min-w-full text-left text-xs">
+            <thead>
+              <tr className="border-b border-white/10 bg-white/[0.03] text-zinc-400">
+                <th className="px-3 py-2 font-semibold">GW</th>
+                {pickedPlayers.map((p, idx) => {
+                  const color = LINE_COLORS[idx % LINE_COLORS.length];
+                  return (
+                    <th key={p.id} className="px-3 py-2 font-semibold text-zinc-200" colSpan={2}>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color.fill }} />
+                        {p.name}
+                      </span>
+                    </th>
+                  );
+                })}
+              </tr>
+              <tr className="border-b border-white/10 bg-white/[0.02] text-[10px] text-zinc-500">
+                <th className="px-3 py-1.5" />
+                {pickedPlayers.map((p) => (
+                  <React.Fragment key={`sub-${p.id}`}>
+                    <th className="px-3 py-1.5 font-medium">Listed</th>
+                    <th className="px-3 py-1.5 font-medium">Draft</th>
+                  </React.Fragment>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {priceHistoryRows.map((row) => (
+                <tr key={row.week} className="border-b border-white/5 text-zinc-300">
+                  <td className="px-3 py-2 font-medium text-zinc-200">
+                    GW{row.week}
+                    {row.week === currentGameweek ? <span className="ml-1 text-red-300">*</span> : null}
+                  </td>
+                  {row.cells.map((cell) => (
+                    <React.Fragment key={`${row.week}-${cell.playerId}`}>
+                      <td className="px-3 py-2 tabular-nums">{cell.listed != null ? money(cell.listed) : "—"}</td>
+                      <td className="px-3 py-2 tabular-nums text-sky-200/90">
+                        {cell.draft != null ? money(cell.draft) : "—"}
+                      </td>
+                    </React.Fragment>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
     </div>
   );
 }

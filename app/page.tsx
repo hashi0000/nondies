@@ -46,6 +46,7 @@ import {
 } from "firebase/firestore";
 import { auth, db, firebaseProjectId } from "@/lib/firebase";
 import { PlayerCompareCharts } from "@/components/PlayerCompareCharts";
+import { appendPriceHistoryWeek, parsePriceHistory } from "@/lib/playerPriceHistory";
 import { calculatePoints, clampNonNegativeInt, fantasyPointsBreakdown } from "@/lib/fantasyPoints";
 import {
   FREE_TRANSFERS_PER_WEEK,
@@ -163,6 +164,7 @@ async function resetAllPlayerDocumentsStats() {
       didNotPlay: false,
       notOut: false,
       history: [],
+      priceHistory: [],
     });
     ops += 1;
     if (ops >= writeLimit) await flush();
@@ -349,6 +351,8 @@ type Player = {
   stumpings: number;
   runOuts: number;
   available: boolean;
+  /** Listed / draft price per completed gameweek (snapshotted on End GW). */
+  priceHistory?: import("@/lib/playerPriceHistory").PlayerPriceHistoryWeek[];
   history: WeekRecord[];
   /** Did not bat this GW — no batting fantasy from runs/4s/6s; show DNB in lists & form (bowling/fielding still score). */
   didNotBat?: boolean;
@@ -2437,6 +2441,7 @@ export default function Page() {
             didNotPlay: Boolean(data.didNotPlay),
             notOut: Boolean(data.notOut),
             history: Array.isArray(data.history) ? data.history : [],
+            priceHistory: parsePriceHistory(data.priceHistory),
           } satisfies Player;
         })
         .filter((p) => Number.isFinite(p.id) && p.name);
@@ -3814,6 +3819,7 @@ export default function Page() {
             notOut: Boolean(p.notOut),
             available: p.available,
             history: p.history ?? [],
+            priceHistory: p.priceHistory ?? [],
           })),
         });
 
@@ -3840,6 +3846,7 @@ export default function Page() {
               notOut: Boolean(p.notOut),
               available: p.available,
               history: p.history ?? [],
+              priceHistory: p.priceHistory ?? [],
             },
             { merge: true },
           );
@@ -4014,9 +4021,15 @@ export default function Page() {
     /** Use admin table when it has unsaved edits so GW points match what you see in Admin. */
     const sourcePlayers = unsavedStats ? localPlayers : players;
     const playersByIdForGw = new Map(sourcePlayers.map((p) => [p.id, p]));
-    const updatedPlayersRaw = sourcePlayers.map((p) => ({
-      ...p,
-      history: [
+    const pricingDuringGw = computeDynamicPricingMap(sourcePlayers);
+    const updatedPlayersRaw = sourcePlayers.map((p) => {
+      const pr = pricingDuringGw.get(p.id);
+      const listed = Math.round(Number(p.price) || 0);
+      const draft = pr?.effectivePrice ?? listed;
+      return {
+        ...p,
+        priceHistory: appendPriceHistoryWeek(p.priceHistory, gw, listed, draft),
+        history: [
         ...(p.history ?? []),
         {
           week: gw,
@@ -4047,7 +4060,8 @@ export default function Page() {
       didNotBat: false,
       didNotPlay: false,
       notOut: false,
-    }));
+    };
+    });
     const pricingAfterGw = computeDynamicPricingMap(updatedPlayersRaw);
     const updatedPlayers = updatedPlayersRaw.map((p) => ({
       ...p,
@@ -4129,6 +4143,7 @@ export default function Page() {
             didNotPlay: false,
             notOut: false,
             history: p.history,
+            priceHistory: p.priceHistory ?? [],
             price: p.price,
           });
         }

@@ -1,4 +1,5 @@
 import { calculatePoints, fantasyPointsBreakdown, type FantasyStatLine } from "@/lib/fantasyPoints";
+import type { PlayerPriceHistoryWeek } from "@/lib/playerPriceHistory";
 
 export type PlayerHistoryWeek = {
   week: number;
@@ -20,10 +21,22 @@ export type PlayerHistoryWeek = {
 export type PlayerForChart = {
   id: number;
   name: string;
+  teamTier: 1 | 2;
+  price: number;
+  basePrice?: number;
   history: PlayerHistoryWeek[];
+  priceHistory?: PlayerPriceHistoryWeek[];
 } & FantasyStatLine;
 
-export type CompareMetric = "points" | "cumulative" | "runs" | "wickets" | "batting" | "bowling";
+export type CompareMetric =
+  | "points"
+  | "cumulative"
+  | "runs"
+  | "wickets"
+  | "batting"
+  | "bowling"
+  | "draftPrice"
+  | "listedPrice";
 
 export const COMPARE_METRIC_LABEL: Record<CompareMetric, string> = {
   points: "Fantasy points (per GW)",
@@ -32,6 +45,8 @@ export const COMPARE_METRIC_LABEL: Record<CompareMetric, string> = {
   wickets: "Wickets (per GW)",
   batting: "Batting fantasy (per GW)",
   bowling: "Bowling fantasy (per GW)",
+  draftPrice: "Draft price (£)",
+  listedPrice: "Listed price (£)",
 };
 
 function hasLiveGameweekStats(p: PlayerForChart): boolean {
@@ -128,6 +143,9 @@ export function buildPlayerSeries(
   metric: CompareMetric,
   currentGameweek: number,
 ): PlayerSeries {
+  if (metric === "draftPrice" || metric === "listedPrice") {
+    return { playerId: p.id, name: p.name, points: [] };
+  }
   const raw: { week: number; value: number }[] = [];
   for (const week of weeks) {
     const rec = weekRecordForPlayer(p, week, currentGameweek);

@@ -459,7 +459,7 @@ export default function RulesPage() {
                     <li>
                       <strong className="text-white">Original season squads</strong> (saved by end of GW{PRE_DYNAMIC_PRICING_SNAPSHOT_GW}): keep{" "}
                       <strong className="text-white">opening purchase prices</strong> for those picks. New transfers cost current market price. Your transfer cap equals your{" "}
-                      <strong className="text-white">current saved squad spend</strong> — reshuffle within that envelope instead of the league cap. Wrong shape or incomplete squads still score — no forced rebuild.
+                      <strong className="text-white">saved squad at today&apos;s market prices</strong> — remove a player to free their current value, then swap within that envelope. Wrong shape or incomplete squads still score — no forced rebuild.
                     </li>
                     <li>
                       <strong className="text-white">New teams</strong> (first saved GW{PRE_DYNAMIC_PRICING_SNAPSHOT_GW + 1} or later): full dynamic rules — valid 2-2-2-1 shape, C/VC/WK, and must fit the squad cap at market prices.
@@ -503,7 +503,7 @@ export default function RulesPage() {
                   </p>
                   <p className="mt-3 text-sm leading-relaxed text-zinc-300">
                     <strong className="text-white">Original season squads</strong> use a{" "}
-                    <strong className="text-white">personal spend cap</strong> instead: your saved squad total at purchase prices. You can swap in-form players as long as your new squad stays within that same spend — no need to beat the league-wide cap.
+                    <strong className="text-white">personal spend cap</strong> equal to their saved squad at <strong className="text-white">current market prices</strong>. Removals refund today&apos;s value; kept picks still store opening purchase price on save.
                   </p>
                 </Card>
 

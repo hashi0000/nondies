@@ -105,6 +105,7 @@ import {
   PERSONAL_SPEND_CAP_NOTICE_KEY,
   draftBudgetForTeam,
   personalSpendCapForTeam,
+  resolveTeamPurchasePrices,
   purchasePricesForRestoredSnapshot,
   squadSpend,
   squadSpendForTeam,
@@ -613,12 +614,12 @@ function PersonalSpendCapAnnouncement({
             {spendCap != null ? (
               <>
                 {" "}
-                Your transfer budget is <strong className="text-white">{money(spendCap)}</strong> — your current saved squad spend — so you can reshuffle in-form players without fighting the league cap.
+                Your transfer budget is <strong className="text-white">{money(spendCap)}</strong> — your saved squad at <strong className="text-white">today&apos;s market prices</strong>. Removals refund current value; kept picks still save at opening price if unchanged.
               </>
             ) : (
               <>
                 {" "}
-                Once you have a saved squad, your transfer budget equals that squad&apos;s spend at opening prices — not the league-wide cap.
+                Once you have a saved squad, your cap equals that squad&apos;s <strong className="text-white">current market value</strong> — removals refund today&apos;s price.
               </>
             )}
           </p>
@@ -657,7 +658,7 @@ function GrandfatheredSquadReminder({ spendCap }: { spendCap: number }) {
     <div className="rounded-xl border border-sky-500/25 bg-sky-500/8 px-3 py-2.5 text-xs text-sky-100/90 ring-1 ring-sky-500/20">
       <strong className="font-semibold text-sky-50">Personal spend cap {money(spendCap)}</strong>
       {" — "}
-      reshuffle within your saved squad spend; new picks use dynamic prices.
+      reshuffle within your squad&apos;s current market value; kept picks still score at opening purchase price on save.
     </div>
   );
 }
@@ -1315,7 +1316,7 @@ function validateTeam(args: {
   }
   if (!checks.withinBudget) {
     problems.push(
-      `Stay within budget (${money(budget)}). Squad costs ${money(spend)} at your purchase prices — swap or remove players.`,
+      `Stay within budget (${money(budget)}). Squad costs ${money(spend)} at current market prices — swap or remove players.`,
     );
   }
   if (!checks.captain) problems.push("Select a captain (C).");
@@ -1347,7 +1348,7 @@ function validateTeam(args: {
       checks.allAvailable = true;
       if (!checks.withinBudget) {
         problems.push(
-          `Stay within your saved squad spend (${money(budget)}). Squad costs ${money(spend)} at your purchase prices — swap or remove players.`,
+          `Stay within your saved squad value (${money(budget)} at current market prices). Squad costs ${money(spend)} — swap or remove players.`,
         );
       }
     }
@@ -4521,7 +4522,7 @@ export default function Page() {
               <span
                 title={
                   usesPersonalSpendCap
-                    ? `Your transfer cap = current saved squad spend at purchase prices (${money(draftBudget)})`
+                    ? `Your transfer cap = current market value of your saved squad (${money(draftBudget)})`
                     : dynamicBudget.floorCost != null
                       ? `Cap = cheapest legal squad (${money(dynamicBudget.floorCost)}) + ${money(dynamicBudget.headroom)} headroom`
                       : undefined
@@ -4616,7 +4617,7 @@ export default function Page() {
                   <CardHeader title="Draft pool"
                     subtitle={
                       mySavedTeam && usesPersonalSpendCap
-                        ? `${GRANDFATHERED_SQUAD_MESSAGE} Transfer cap ${money(draftBudget)} (your saved squad spend). New picks use dynamic prices (£${POOL_PRICE_BAND.min}–£${POOL_PRICE_BAND.max}).`
+                        ? `${GRANDFATHERED_SQUAD_MESSAGE} Transfer cap ${money(draftBudget)} (your squad at market prices). Removals refund current value.`
                         : mySavedTeam && isGrandfatheredPricingTeam(mySavedTeam)
                           ? `${GRANDFATHERED_SQUAD_MESSAGE} Draft pool shows dynamic prices (£${POOL_PRICE_BAND.min}–£${POOL_PRICE_BAND.max}) for anyone you add or swap in.`
                           : `Squad shape: ${SQUAD_ROLES.bat} batters, ${SQUAD_ROLES.ar} all-rounders, ${SQUAD_ROLES.bowl} bowlers, ${SQUAD_ROLES.wk} WK — cap ${money(squadBudget)} at current market prices (£${POOL_PRICE_BAND.min}–£${POOL_PRICE_BAND.max}). New teams must fit the full dynamic rules.`
@@ -4718,8 +4719,7 @@ export default function Page() {
                         </div>
                         {usesPersonalSpendCap ? (
                           <p className="mt-2 text-xs text-zinc-500">
-                            {money(budgetHeadroom)} headroom · removals credit your{" "}
-                            <strong className="text-zinc-400">squad price</strong>, not the pool market price
+                            {money(budgetHeadroom)} headroom · removals refund <strong className="text-zinc-400">current market value</strong>
                           </p>
                         ) : null}
                       </div>
@@ -4933,6 +4933,14 @@ export default function Page() {
                           const isVC = builder.viceCaptain === p.id;
                           const isWK = builder.keeper === p.id;
                           const squadPrice = priceForIdFromMap(p.id, draftPurchasePrices, marketPriceForId);
+                          const savedPurchase =
+                            mySavedTeam &&
+                            isGrandfatheredPricingTeam(mySavedTeam) &&
+                            mySavedTeam.players.includes(p.id)
+                              ? resolveTeamPurchasePrices(mySavedTeam, listedPriceForId, marketPriceForId)[
+                                  String(p.id)
+                                ]
+                              : undefined;
                           return (
                             <div key={p.id} className="px-4 py-3">
                               <div className="flex items-start justify-between gap-3">
@@ -4941,12 +4949,10 @@ export default function Page() {
                                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
                                     <Pill tone="amber">{ROLE_LABEL[p.role]}</Pill>
                                     <Pill tone={p.teamTier === 1 ? "blue" : "neutral"}>{TEAM_TIER_SHORT[p.teamTier]}</Pill>
-                                    <span className="font-semibold text-white">{money(squadPrice)} in squad</span>
-                                    {squadPrice !== p.price ? (
-                                      <span className="text-zinc-500">pool {money(p.price)}</span>
-                                    ) : (
-                                      <PriceWithForm price={p.price} basePrice={p.basePrice} priceDelta={p.priceDelta} />
-                                    )}
+                                    <PriceWithForm price={p.price} basePrice={p.basePrice} priceDelta={p.priceDelta} />
+                                    {savedPurchase != null && savedPurchase !== squadPrice ? (
+                                      <span className="text-zinc-500">bought {money(savedPurchase)}</span>
+                                    ) : null}
                                     {transferBaselineSet && !transferBaselineSet.has(p.id) ? (
                                       <Pill tone="green">Transfer in</Pill>
                                     ) : null}

@@ -142,8 +142,8 @@ export function squadSpendForTeam(
 }
 
 /**
- * Original season squads draft against their saved spend (purchase prices), not the league dynamic cap.
- * Returns null when the league-wide cap applies (new teams or no saved squad yet).
+ * Original season squads draft against their saved squad at current market value.
+ * Removals refund today's price; opening purchase prices still apply on save for kept picks.
  */
 export function personalSpendCapForTeam(
   team: TeamPurchaseContext | null | undefined,
@@ -151,7 +151,7 @@ export function personalSpendCapForTeam(
   marketPriceForId: (id: number) => number,
 ): number | null {
   if (!team || !isGrandfatheredPricingTeam(team) || team.players.length === 0) return null;
-  return squadSpendForTeam(team, listedPriceForId, marketPriceForId);
+  return squadSpend(team.players, {}, marketPriceForId);
 }
 
 /** Draft/save budget: personal saved spend for original squads, else league dynamic cap. */
@@ -164,33 +164,16 @@ export function draftBudgetForTeam(
   return personalSpendCapForTeam(team, listedPriceForId, marketPriceForId) ?? leagueBudget;
 }
 
-/** Draft spend: kept picks use stored/original price; new picks use current market price. */
+/** Draft spend: always current market price (removals refund today's value). */
 export function draftPurchasePricesForSelection(
   selected: number[],
-  savedTeam: TeamPurchaseContext | null | undefined,
+  _savedTeam: TeamPurchaseContext | null | undefined,
   marketPriceForId: (id: number) => number,
-  listedPriceForId: (id: number) => number | undefined,
+  _listedPriceForId: (id: number) => number | undefined,
 ): PurchasePriceMap {
   const map: PurchasePriceMap = {};
-  const grandfathered = savedTeam ? isGrandfatheredPricingTeam(savedTeam) : false;
-  const savedPrices =
-    savedTeam && grandfathered
-      ? resolveTeamPurchasePrices(savedTeam, listedPriceForId, marketPriceForId)
-      : {};
   for (const id of selected) {
-    const key = String(id);
-    if (grandfathered && savedTeam?.players.includes(id)) {
-      const savedPrice = savedPrices[key];
-      if (savedPrice != null) {
-        map[key] = savedPrice;
-        continue;
-      }
-      if (!isOriginalSeasonPick(id, savedTeam.playerJoinedGameweek)) {
-        map[key] = marketPriceForId(id);
-        continue;
-      }
-    }
-    map[key] = marketPriceForId(id);
+    map[String(id)] = marketPriceForId(id);
   }
   return map;
 }

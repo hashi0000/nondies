@@ -100,5 +100,11 @@ service cloud.firestore {
       allow read: if signedIn();
       allow create, update, delete: if canManageLeague();
     }
+
+    // Team points backups — live after Save stats, and on End GW. Read-only for managers; write for league admins.
+    match /pointsBackups/{backupId} {
+      allow read: if signedIn();
+      allow create, update, delete: if canManageLeague();
+    }
   }
 }

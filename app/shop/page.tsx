@@ -14,7 +14,7 @@ import {
   Zap,
 } from "lucide-react";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { collection, doc, onSnapshot, updateDoc } from "firebase/firestore";
+import { collection, doc, getDoc, onSnapshot, updateDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import { ActivePerksSummary } from "@/components/ActivePerksSummary";
 import {
@@ -29,6 +29,7 @@ import {
   type ShopItem,
   type TeamFantasyShopState,
 } from "@/lib/fantasyShop";
+import { appendPointsAudit, parsePointsAudit } from "@/lib/teamPointsBackup";
 import {
   parsePlayerStatLine,
   totalEarnedFantasyPoints,
@@ -365,10 +366,22 @@ export default function FantasyShopPage() {
     setBuying(true);
     setNotice(null);
     try {
-      await updateDoc(doc(db, "teams", authUser.uid), {
+      const teamRef = doc(db, "teams", authUser.uid);
+      const teamSnap = await getDoc(teamRef);
+      const existingAudit = parsePointsAudit(teamSnap.exists() ? teamSnap.data()?.pointsAudit : undefined);
+      const patch: Record<string, unknown> = {
         cumulativePoints: nextBalance,
         fantasyShop: nextShop,
-      });
+      };
+      if (cost > 0) {
+        patch.pointsAudit = appendPointsAudit(existingAudit, {
+          at: new Date().toISOString(),
+          gameweek: currentGameweek,
+          cumulativePoints: nextBalance,
+          source: `shop:${item.id}`,
+        });
+      }
+      await updateDoc(teamRef, patch);
       setPendingItem(null);
       setNotice(
         alreadyOwned

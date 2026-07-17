@@ -247,7 +247,9 @@ export default function RulesPage() {
                       <strong className="text-white">{FREE_TRANSFERS_PER_WEEK + MAX_BANKED_FREE_TRANSFERS}</strong> free in one GW). Each change beyond that costs{" "}
                       <strong className="text-white">{POINTS_PER_EXTRA_TRANSFER} points</strong> off your league total (committee can retune anytime in{" "}
                       <code className="rounded bg-black/40 px-1 font-mono text-[11px] text-zinc-200">lib/leagueConfig.ts</code> as <code className="rounded bg-black/40 px-1 font-mono text-[11px]">POINTS_PER_EXTRA_TRANSFER</code>).
-                      Transfers saved before {LINEUP_LOCK_SUMMARY} (your time) score from <strong className="text-white">this</strong> gameweek; after lock, new signings only count from the next gameweek. If you transfer the captain out, pick a new captain.
+                      Transfers saved before {LINEUP_LOCK_SUMMARY} (your time) score from <strong className="text-white">this</strong> gameweek.
+                      After lock, selections stay locked until the admin <strong className="text-white">ends the gameweek</strong> — you cannot transfer into players who already have points on the board.
+                      New signings after lock (or players who already have live points this week) only count from the <strong className="text-white">next</strong> gameweek. If you transfer the captain out, pick a new captain.
                     </li>
                     <li>
                       <strong className="text-white">GW1 pre-lock window:</strong> unlimited free changes until the first lock at <strong className="text-white">{LINEUP_LOCK_SUMMARY}</strong> (local time).
@@ -799,7 +801,7 @@ export default function RulesPage() {
                       <ol className="relative border-l border-white/10 ml-2 grid gap-5">
                         {[
                           { day: "Mon–Fri", text: "Select or update your squad. You can change it as many times as you like until the weekly lock." },
-                          { day: LINEUP_LOCK_SUMMARY_SHORT, text: "Selection locks. No more changes until the admin ends the gameweek.", highlight: true },
+                          { day: LINEUP_LOCK_SUMMARY_SHORT, text: "Selection locks. No more changes until the admin ends the gameweek — this stops managers transferring into players after stats are entered.", highlight: true },
                           { day: "Weekend", text: "The match is played. Real performances recorded by the club." },
                           { day: "Post-match", text: "Admin updates stats (manually or via Play Cricket match import). Points for the week are computed from those numbers." },
                           { day: "End GW", text: "Admin ends the gameweek: each team’s cumulative total increases by that week’s score; player weekly stats reset to zero for the next round." },

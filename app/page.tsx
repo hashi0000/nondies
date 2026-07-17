@@ -50,7 +50,18 @@ import { auth, db, firebaseProjectId } from "@/lib/firebase";
 import { PlayerCompareCharts } from "@/components/PlayerCompareCharts";
 import { ActivePerksSummary } from "@/components/ActivePerksSummary";
 import { appendPriceHistoryWeek, parsePriceHistory } from "@/lib/playerPriceHistory";
-import { calculatePoints, clampNonNegativeInt, fantasyPointsBreakdown } from "@/lib/fantasyPoints";
+import { calculatePoints, clampNonNegativeInt, fantasyPointsBreakdown, type FantasyStatLine } from "@/lib/fantasyPoints";
+import {
+  appendPointsAudit,
+  buildTeamPointsBackupRow,
+  parsePointsAudit,
+  parseSeasonPointsByGw,
+  parseTeamPointsBackupDoc,
+  seasonPointsByGwFromEnd,
+  type PointsAuditEntry,
+  type SeasonGwPointsEntry,
+  type TeamPointsBackupDoc,
+} from "@/lib/teamPointsBackup";
 import { parseTeamFantasyShop, type ShopItemId } from "@/lib/fantasyShop";
 import { totalEarnedFantasyPoints } from "@/lib/teamFantasyPoints";
 import {
@@ -399,6 +410,10 @@ type SavedTeam = {
   firstSaveGameweek?: number;
   /** Fantasy Shop — owned/active perks and purchase history. */
   fantasyShop?: unknown;
+  /** Permanent ledger of week + cumulative after each End GW. */
+  seasonPointsByGw?: Record<string, SeasonGwPointsEntry>;
+  /** Recent cumulative changes (transfers, shop, admin) — last ~40. */
+  pointsAudit?: PointsAuditEntry[];
   createdBy?: string;
   createdAt?: unknown;
 };
@@ -835,6 +850,27 @@ function snapshotStatDiffCount(curr: SnapshotPlayerRow[] | undefined, prev: Snap
   return changed;
 }
 
+/**
+ * Next Saturday lock after a gameweek opens (End GW / season start).
+ * If the GW is opened after that Saturday's lock time, lock rolls to the following Saturday
+ * so managers can still set a squad for the newly opened week.
+ */
+function getLockDateForOpenGameweek(openedAt: Date): Date {
+  const lock = new Date(openedAt);
+  const day = lock.getDay();
+  const addDays = (LINEUP_LOCK_WEEKDAY - day + 7) % 7;
+  lock.setDate(lock.getDate() + addDays);
+  lock.setHours(LINEUP_LOCK_HOUR, LINEUP_LOCK_MINUTE, 0, 0);
+  if (openedAt.getTime() >= lock.getTime()) {
+    lock.setDate(lock.getDate() + 7);
+  }
+  return lock;
+}
+
+/**
+ * Legacy calendar lock (forward to this week's Saturday).
+ * Unsafe alone after Saturday while the same GW is still open — prefer {@link getLockDateForOpenGameweek}.
+ */
 function getThisWeeksLockDate(now = new Date()) {
   const lock = new Date(now);
   lock.setDate(lock.getDate() + (LINEUP_LOCK_WEEKDAY - lock.getDay()));
@@ -842,8 +878,51 @@ function getThisWeeksLockDate(now = new Date()) {
   return lock;
 }
 
-function isSelectionLocked(now = new Date()) {
-  return now.getTime() >= getThisWeeksLockDate(now).getTime();
+/** Most recent Saturday lock that has already occurred (or today's lock if past the time). */
+function getMostRecentLineupLockDate(now = new Date()): Date {
+  const lock = new Date(now);
+  const day = lock.getDay();
+  const daysSinceLockDay = (day - LINEUP_LOCK_WEEKDAY + 7) % 7;
+  lock.setDate(lock.getDate() - daysSinceLockDay);
+  lock.setHours(LINEUP_LOCK_HOUR, LINEUP_LOCK_MINUTE, 0, 0);
+  if (now.getTime() < lock.getTime()) {
+    lock.setDate(lock.getDate() - 7);
+  }
+  return lock;
+}
+
+/**
+ * Lineups stay locked from Saturday until the admin ends the gameweek (which sets a new gameweekOpenedAt).
+ * Without gameweekOpenedAt (legacy), stay locked once the most recent Saturday lock has passed —
+ * this closes the Sunday–Friday hole where managers could transfer into players with live stats.
+ */
+function getEffectiveLockDate(now = new Date(), gameweekOpenedAt: Date | null = null): Date {
+  if (gameweekOpenedAt) return getLockDateForOpenGameweek(gameweekOpenedAt);
+  const upcoming = getThisWeeksLockDate(now);
+  if (now.getTime() < upcoming.getTime()) return upcoming;
+  return getMostRecentLineupLockDate(now);
+}
+
+function isSelectionLocked(now = new Date(), gameweekOpenedAt: Date | null = null) {
+  return now.getTime() >= getEffectiveLockDate(now, gameweekOpenedAt).getTime();
+}
+
+function parseGameweekOpenedAt(raw: unknown): Date | null {
+  if (raw == null) return null;
+  if (typeof raw === "object" && raw !== null && "toDate" in raw && typeof (raw as { toDate: () => Date }).toDate === "function") {
+    const d = (raw as { toDate: () => Date }).toDate();
+    return Number.isFinite(d.getTime()) ? d : null;
+  }
+  if (typeof raw === "object" && raw !== null && "seconds" in raw) {
+    const seconds = Number((raw as { seconds: number }).seconds);
+    if (!Number.isFinite(seconds)) return null;
+    return new Date(seconds * 1000);
+  }
+  if (typeof raw === "string" || typeof raw === "number") {
+    const d = new Date(raw);
+    return Number.isFinite(d.getTime()) ? d : null;
+  }
+  return null;
 }
 
 /** Sum of completed-gameweek fantasy points (raw player score, before C/VC on a team). */
@@ -1072,25 +1151,36 @@ function playerFirstGameweekOnTeam(team: SavedTeam, playerId: number): number {
   return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
 }
 
-function playerScoringStartsGameweek(team: SavedTeam, playerId: number, scoringGameweek: number): number {
+/**
+ * Whether a squad player scores in a given gameweek.
+ * `playerJoinedGameweek[id] === scoringGameweek + 1` means deferred (transfer after lock / farming block) — does NOT score this GW.
+ */
+function playerScoresInGameweek(team: SavedTeam, playerId: number, scoringGameweek: number): boolean {
   const joined = playerFirstGameweekOnTeam(team, playerId);
-  if (joined === scoringGameweek + 1) return scoringGameweek;
-  return joined;
+  if (joined === scoringGameweek + 1) return false;
+  return joined <= scoringGameweek;
 }
 
-function playerScoresInGameweek(team: SavedTeam, playerId: number, scoringGameweek: number): boolean {
-  return playerScoringStartsGameweek(team, playerId, scoringGameweek) <= scoringGameweek;
+function playerHasLiveFantasyPoints(p: FantasyStatLine | Player | undefined): boolean {
+  if (!p) return false;
+  return calculatePoints(p) > 0;
 }
 
 /**
- * First time a player appears on a saved squad (new team or transfer in).
- * GW1: they score in the opening gameweek like everyone else.
- * GW2+: they only start counting from the *next* gameweek so they can’t farm points from stats already on the board.
+ * First gameweek a newly signed player contributes points.
+ * GW1: scores immediately.
+ * GW2+: scores this GW only if lineups are still unlocked AND the player has no live points yet
+ * (prevents transferring in players after stats are entered). Otherwise starts next GW.
  */
-function firstScoringGameweekForNewSigning(currentGameweek: number, now = new Date()): number {
+function firstScoringGameweekForNewSigning(
+  currentGameweek: number,
+  now = new Date(),
+  opts?: { gameweekOpenedAt?: Date | null; playerAlreadyScored?: boolean },
+): number {
   if (currentGameweek <= 1) return 1;
-  if (!isSelectionLocked(now)) return currentGameweek;
-  return currentGameweek + 1;
+  const locked = isSelectionLocked(now, opts?.gameweekOpenedAt ?? null);
+  if (locked || opts?.playerAlreadyScored) return currentGameweek + 1;
+  return currentGameweek;
 }
 
 function transferPenaltiesApplyInGameweek(currentGameweek: number): boolean {
@@ -1103,13 +1193,14 @@ function transferPenaltiesApplyForTeam(
   existing: SavedTeam | null,
   now: Date,
   freeSquadRebuildGameweek?: number | null,
+  gameweekOpenedAt: Date | null = null,
 ): boolean {
   if (isFreeSquadRebuildGameweek(currentGameweek, freeSquadRebuildGameweek)) return false;
   if (!transferPenaltiesApplyInGameweek(currentGameweek)) return false;
   if (!existing) return false;
   const fsg = existing.firstSaveGameweek;
   if (typeof fsg !== "number" || !Number.isFinite(fsg)) return true;
-  if (Math.floor(fsg) === currentGameweek && !isSelectionLocked(now)) return false;
+  if (Math.floor(fsg) === currentGameweek && !isSelectionLocked(now, gameweekOpenedAt)) return false;
   return true;
 }
 
@@ -1172,11 +1263,22 @@ function buildPlayerJoinedGameweekAfterSave(
   newPlayers: number[],
   gameweek: number,
   now = new Date(),
+  opts?: {
+    gameweekOpenedAt?: Date | null;
+    playerAlreadyScored?: (playerId: number) => boolean;
+  },
 ): Record<string, number> {
   const next: Record<string, number> = {};
+  const joinOpts = {
+    gameweekOpenedAt: opts?.gameweekOpenedAt ?? null,
+  };
   if (!existing) {
-    const j = firstScoringGameweekForNewSigning(gameweek, now);
-    for (const id of newPlayers) next[String(id)] = j;
+    for (const id of newPlayers) {
+      next[String(id)] = firstScoringGameweekForNewSigning(gameweek, now, {
+        ...joinOpts,
+        playerAlreadyScored: opts?.playerAlreadyScored?.(id) ?? false,
+      });
+    }
     return next;
   }
   const prevMap = existing.playerJoinedGameweek ?? {};
@@ -1192,10 +1294,13 @@ function buildPlayerJoinedGameweekAfterSave(
             ? Number(String(v).trim())
             : 1;
       if (!Number.isFinite(n) || n < 1) n = 1;
-      if (n === gameweek + 1 && !isSelectionLocked(now)) n = gameweek;
+      // Keep deferred joins deferred — never promote GW+1 back to the current GW on re-save.
       next[key] = n;
     } else {
-      next[key] = firstScoringGameweekForNewSigning(gameweek, now);
+      next[key] = firstScoringGameweekForNewSigning(gameweek, now, {
+        ...joinOpts,
+        playerAlreadyScored: opts?.playerAlreadyScored?.(id) ?? false,
+      });
     }
   }
   return next;
@@ -1728,6 +1833,7 @@ function buildTransferSavePreview(
   playersById: Map<number, Player>,
   now: Date,
   freeSquadRebuildGameweek?: number | null,
+  gameweekOpenedAt: Date | null = null,
 ) {
   if (selected.length !== SQUAD_SIZE) return null;
   const penaltiesApply = transferPenaltiesApplyForTeam(
@@ -1735,6 +1841,7 @@ function buildTransferSavePreview(
     mySavedTeam ?? null,
     now,
     freeSquadRebuildGameweek,
+    gameweekOpenedAt,
   );
   if (!mySavedTeam) {
     return { kind: "first" as const, penaltiesApply };
@@ -2283,6 +2390,7 @@ export default function Page() {
   const [players, setPlayers] = useState<Player[]>(SEEDED_PLAYERS);
   const [teams, setTeams] = useState<SavedTeam[]>([]);
   const [currentGameweek, setCurrentGameweek] = useState(1);
+  const [gameweekOpenedAt, setGameweekOpenedAt] = useState<Date | null>(null);
   const [dnpHistoryRepairDone, setDnpHistoryRepairDone] = useState(false);
   const [freeSquadRebuildGameweek, setFreeSquadRebuildGameweek] = useState<number | null>(null);
   const [pricingAmnestyBusy, setPricingAmnestyBusy] = useState(false);
@@ -2373,6 +2481,7 @@ export default function Page() {
   /** "live" = current squads; number = completed GW from gwTeams archive. */
   const [leaderboardGwView, setLeaderboardGwView] = useState<number | "live">("live");
   const [gwTeamsArchive, setGwTeamsArchive] = useState<GwTeamsDoc[]>([]);
+  const [pointsBackups, setPointsBackups] = useState<TeamPointsBackupDoc[]>([]);
   const [lastLoginByUid, setLastLoginByUid] = useState<Map<string, Timestamp>>(() => new Map());
   const lastLoginWriteMsRef = useRef(0);
   const [undoingGameweek, setUndoingGameweek] = useState(false);
@@ -2400,6 +2509,7 @@ export default function Page() {
       if (snap.exists()) {
         const data = snap.data();
         setCurrentGameweek(data.currentGameweek ?? 1);
+        setGameweekOpenedAt(parseGameweekOpenedAt(data.gameweekOpenedAt));
         setDnpHistoryRepairDone(Boolean(data.dnpHistoryRepairDone));
         const fsr = data.freeSquadRebuildGameweek;
         setFreeSquadRebuildGameweek(
@@ -2407,6 +2517,7 @@ export default function Page() {
         );
       } else {
         setCurrentGameweek(1);
+        setGameweekOpenedAt(null);
         setDnpHistoryRepairDone(false);
         setFreeSquadRebuildGameweek(null);
       }
@@ -2548,6 +2659,27 @@ export default function Page() {
       },
       (err) => {
         setFsError(`gwTeams: ${err?.message ?? "Failed to read gwTeams."}`);
+      },
+    );
+    return () => unsub();
+  }, [authUser]);
+
+  // Firestore: team points backups (Save stats + End GW)
+  useEffect(() => {
+    if (!authUser) return;
+    const q = query(collection(db, "pointsBackups"), orderBy("createdAt", "desc"), limit(30));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list: TeamPointsBackupDoc[] = [];
+        for (const d of snap.docs) {
+          const parsed = parseTeamPointsBackupDoc(d.id, d.data() as Record<string, unknown>);
+          if (parsed) list.push(parsed);
+        }
+        setPointsBackups(list);
+      },
+      () => {
+        /* rules may not be published yet — non-fatal */
       },
     );
     return () => unsub();
@@ -2778,12 +2910,12 @@ export default function Page() {
   }, []);
   const lockDate = useMemo(() => {
     void lockClock;
-    return getThisWeeksLockDate(new Date());
-  }, [lockClock]);
+    return getEffectiveLockDate(new Date(), gameweekOpenedAt);
+  }, [lockClock, gameweekOpenedAt]);
   const locked = useMemo(() => {
     void lockClock;
-    return isSelectionLocked(new Date());
-  }, [lockClock]);
+    return isSelectionLocked(new Date(), gameweekOpenedAt);
+  }, [lockClock, gameweekOpenedAt]);
 
   const lastLoginNowMs = useMemo(() => {
     void lockClock;
@@ -3214,8 +3346,9 @@ export default function Page() {
       playersById,
       new Date(),
       freeSquadRebuildGameweek,
+      gameweekOpenedAt,
     );
-  }, [mySavedTeam, builder.selected, currentGameweek, playersById, lockClock, freeSquadRebuildGameweek]);
+  }, [mySavedTeam, builder.selected, currentGameweek, playersById, lockClock, freeSquadRebuildGameweek, gameweekOpenedAt]);
 
   const transferBaselineSet = useMemo(() => {
     if (!mySavedTeam || builder.selected.length !== SQUAD_SIZE) return null;
@@ -3226,9 +3359,10 @@ export default function Page() {
       mySavedTeam,
       now,
       freeSquadRebuildGameweek,
+      gameweekOpenedAt,
     );
     return new Set(squadTransferBaseline(mySavedTeam, penaltiesApply, currentGameweek));
-  }, [mySavedTeam, builder.selected, currentGameweek, lockClock, freeSquadRebuildGameweek]);
+  }, [mySavedTeam, builder.selected, currentGameweek, lockClock, freeSquadRebuildGameweek, gameweekOpenedAt]);
 
   const saveTeamButtonLabel = useMemo(() => {
     if (savingTeam) return "Saving…";
@@ -3252,10 +3386,10 @@ export default function Page() {
     const newJoinGrace =
       !!mySavedTeam &&
       transferPenaltiesApplyInGameweek(currentGameweek) &&
-      !transferPenaltiesApplyForTeam(currentGameweek, mySavedTeam, now, freeSquadRebuildGameweek) &&
+      !transferPenaltiesApplyForTeam(currentGameweek, mySavedTeam, now, freeSquadRebuildGameweek, gameweekOpenedAt) &&
       !pricingAmnestyActive;
     return { gw1Open, newJoinGrace, pricingAmnesty: pricingAmnestyActive };
-  }, [currentGameweek, mySavedTeam, lockClock, freeSquadRebuildGameweek, pricingAmnestyActive]);
+  }, [currentGameweek, mySavedTeam, lockClock, freeSquadRebuildGameweek, pricingAmnestyActive, gameweekOpenedAt]);
 
   /** Free transfers you had when this gameweek opened (from saved team). */
   const freeTransfersAtLock = useMemo(() => {
@@ -3447,7 +3581,16 @@ export default function Page() {
         const newPlayers = [...builder.selected];
         const prevCumulative = existing?.cumulativePoints ?? 0;
         const nowSave = new Date();
-        const playerJoinedGameweek = buildPlayerJoinedGameweekAfterSave(existing, newPlayers, currentGameweek, nowSave);
+        const playerJoinedGameweek = buildPlayerJoinedGameweekAfterSave(
+          existing,
+          newPlayers,
+          currentGameweek,
+          nowSave,
+          {
+            gameweekOpenedAt,
+            playerAlreadyScored: (id) => playerHasLiveFantasyPoints(playersById.get(id)),
+          },
+        );
         const playerPurchasePrices = buildPurchasePricesAfterSave({
           existing,
           newPlayers,
@@ -3460,6 +3603,7 @@ export default function Page() {
           existing,
           nowSave,
           freeSquadRebuildGameweek,
+          gameweekOpenedAt,
         );
 
         let baseline: number[];
@@ -3478,9 +3622,13 @@ export default function Page() {
               ? [...existing.players]
               : [...newPlayers];
           freeAtGwStart = resolveFreeTransfersAtGwStart(existing.freeTransfersAtGwStart);
+          const unlocked = !isSelectionLocked(nowSave, gameweekOpenedAt);
           const rollBaselineForNewJoinerGrace =
             !penaltiesApply && transferPenaltiesApplyInGameweek(currentGameweek);
-          baseline = rollBaselineForNewJoinerGrace ? [...newPlayers] : baselineFromStored;
+          // While unlocked, the saved squad is the official scoring XI for this GW.
+          // After lock (until End GW), baseline stays frozen so mid-week edits cannot farm live points.
+          baseline =
+            unlocked || rollBaselineForNewJoinerGrace ? [...newPlayers] : baselineFromStored;
         }
 
         const T = countOutgoingPlayerChanges(baseline, newPlayers);
@@ -3489,9 +3637,7 @@ export default function Page() {
         const oldApplied = existing?.transferPenaltyPointsApplied ?? 0;
         const newCumulative = Math.round((prevCumulative - (penaltyDue - oldApplied)) * 10) / 10;
 
-        await setDoc(
-          ref,
-          {
+        const teamPayload: Record<string, unknown> = {
             name: builder.teamName.trim(),
             ownerName: ownerNameInput.trim() || accountHolderName(authUser),
             players: newPlayers,
@@ -3507,9 +3653,17 @@ export default function Page() {
             playerJoinedGameweek,
             playerPurchasePrices,
             ...(!existing ? { firstSaveGameweek: currentGameweek } : {}),
-          },
-          { merge: true },
-        );
+        };
+        if (newCumulative !== prevCumulative) {
+          teamPayload.pointsAudit = appendPointsAudit(parsePointsAudit(existing?.pointsAudit), {
+            at: new Date().toISOString(),
+            gameweek: currentGameweek,
+            cumulativePoints: newCumulative,
+            source: penaltyDue > 0 ? "transfer-penalty" : "squad-save",
+          });
+        }
+
+        await setDoc(ref, teamPayload, { merge: true });
       });
       setBuilder((prev) => ({ ...prev, teamName: "" }));
       setOwnerNameTouched(false);
@@ -3893,6 +4047,31 @@ export default function Page() {
         }
         await batch.commit();
         statsSavePendingRef.current = committedSnapshot;
+
+        // Backup every team's live week + cumulative totals after stats land.
+        const byId = new Map(committedSnapshot.map((p) => [p.id, p]));
+        const backupTeams = teams.map((t) =>
+          buildTeamPointsBackupRow({
+            uid: t.uid,
+            name: t.name,
+            ownerName: t.ownerName,
+            players: t.players,
+            captain: t.captain,
+            viceCaptain: t.viceCaptain,
+            keeper: t.keeper,
+            weekPoints: computeWeekPoints(t, byId, currentGameweek),
+            cumulativePoints: t.cumulativePoints ?? 0,
+          }),
+        );
+        await addDoc(collection(db, "pointsBackups"), {
+          gameweek: currentGameweek,
+          kind: "live-stats-save",
+          createdAt: serverTimestamp(),
+          createdBy: authUser?.uid ?? null,
+          label: `Live totals after Save stats · GW${currentGameweek}`,
+          teams: backupTeams,
+        });
+
         if (pendingDnpHistoryRepairRef.current) {
           await setDoc(
             doc(db, "gameState", "current"),
@@ -4164,6 +4343,23 @@ export default function Page() {
             transferPenaltyPointsApplied: 0,
             playerJoinedGameweek: team.playerJoinedGameweek ?? {},
             playerPurchasePrices,
+            seasonPointsByGw: seasonPointsByGwFromEnd(
+              parseSeasonPointsByGw(team.seasonPointsByGw),
+              gw,
+              {
+                weekPoints: weekPts,
+                cumulativePointsBefore: cumulativeBefore,
+                cumulativePointsAfter: cumulativeAfter,
+              },
+            ),
+            pointsAudit: appendPointsAudit(parsePointsAudit(team.pointsAudit), {
+              at: new Date().toISOString(),
+              gameweek: gw,
+              cumulativePoints: cumulativeAfter,
+              weekPoints: weekPts,
+              total: cumulativeAfter,
+              source: `end-gw-${gw}`,
+            }),
           });
         }
 
@@ -4214,7 +4410,38 @@ export default function Page() {
           );
         }
         try {
-          await setDoc(doc(db, "gameState", "current"), { currentGameweek: gw + 1, freeSquadRebuildGameweek: deleteField() }, { merge: true });
+          await addDoc(collection(db, "pointsBackups"), {
+            gameweek: gw,
+            kind: "end-gw",
+            createdAt: serverTimestamp(),
+            createdBy: authUser.uid,
+            label: `Ended GW${gw} — locked week + cumulative totals`,
+            teams: teamSnapshots.map((ts) =>
+              buildTeamPointsBackupRow({
+                uid: ts.uid,
+                name: ts.name,
+                ownerName: ts.ownerName,
+                players: ts.players,
+                captain: ts.captain,
+                viceCaptain: ts.viceCaptain,
+                keeper: ts.keeper,
+                weekPoints: ts.weekPoints,
+                cumulativePoints: ts.cumulativePointsBefore,
+              }),
+            ),
+          });
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          throw new Error(
+            `pointsBackups write — ${msg}. Publish firestore.rules including match /pointsBackups/{backupId}.`,
+          );
+        }
+        try {
+          await setDoc(
+            doc(db, "gameState", "current"),
+            { currentGameweek: gw + 1, gameweekOpenedAt: serverTimestamp(), freeSquadRebuildGameweek: deleteField() },
+            { merge: true },
+          );
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : String(e);
           throw new Error(`gameState write — ${msg}`);
@@ -4406,7 +4633,7 @@ export default function Page() {
           });
         }
 
-        batch.set(doc(db, "gameState", "current"), { currentGameweek: gwToUndo }, { merge: true });
+        batch.set(doc(db, "gameState", "current"), { currentGameweek: gwToUndo, gameweekOpenedAt: serverTimestamp() }, { merge: true });
         await batch.commit();
       });
       setUnsavedStats(false);
@@ -4458,7 +4685,7 @@ export default function Page() {
           if (ops >= writeLimit) await flush();
         }
 
-        batch.set(doc(db, "gameState", "current"), { currentGameweek: 1 }, { merge: true });
+        batch.set(doc(db, "gameState", "current"), { currentGameweek: 1, gameweekOpenedAt: serverTimestamp() }, { merge: true });
         ops += 1;
         await flush();
       });
@@ -4500,7 +4727,7 @@ export default function Page() {
           if (ops >= writeLimit) await flush();
         }
 
-        batch.set(doc(db, "gameState", "current"), { currentGameweek: 1 }, { merge: true });
+        batch.set(doc(db, "gameState", "current"), { currentGameweek: 1, gameweekOpenedAt: serverTimestamp() }, { merge: true });
         ops += 1;
         await flush();
       });
@@ -5773,6 +6000,78 @@ export default function Page() {
                                   </div>
                                 </div>
                               ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl bg-white/5 ring-1 ring-white/10">
+                        <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5">
+                          <div>
+                            <div className="text-base font-semibold">Team points backups</div>
+                            <div className="mt-0.5 text-xs text-zinc-500">
+                              Saved automatically on <span className="font-semibold text-zinc-200">Save stats</span> (live totals) and{" "}
+                              <span className="font-semibold text-zinc-200">End gameweek</span> (locked week). Each team also stores{" "}
+                              <span className="font-semibold text-zinc-200">seasonPointsByGw</span> after every End GW. View only — no restore.
+                            </div>
+                          </div>
+                        </div>
+                        <div className="border-t border-white/10 p-4 sm:p-5">
+                          {pointsBackups.length === 0 ? (
+                            <div className="text-sm text-zinc-400">
+                              No points backups yet. Click Save stats or End gameweek to create the first one. Publish{" "}
+                              <span className="font-mono text-zinc-300">pointsBackups</span> rules if this stays empty.
+                            </div>
+                          ) : (
+                            <div className="grid max-h-[28rem] gap-3 overflow-y-auto">
+                              {pointsBackups.map((b) => {
+                                const when =
+                                  b.createdAt &&
+                                  typeof b.createdAt === "object" &&
+                                  b.createdAt !== null &&
+                                  "toDate" in b.createdAt
+                                    ? (b.createdAt as { toDate: () => Date }).toDate().toLocaleString()
+                                    : "—";
+                                const sorted = [...b.teams].sort(
+                                  (a, c) => c.total - a.total || a.name.localeCompare(c.name),
+                                );
+                                return (
+                                  <div key={b.id} className="rounded-2xl bg-black/20 p-4 ring-1 ring-white/10">
+                                    <div className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+                                      <Pill tone="neutral">GW{b.gameweek}</Pill>
+                                      <Pill tone={b.kind === "end-gw" ? "green" : "blue"}>
+                                        {b.kind === "end-gw" ? "End GW" : b.kind === "live-stats-save" ? "Save stats" : "Manual"}
+                                      </Pill>
+                                      <span className="truncate text-zinc-100">{b.label ?? "Points backup"}</span>
+                                    </div>
+                                    <div className="mt-1 text-xs text-zinc-500">{when} · {sorted.length} teams</div>
+                                    <div className="mt-3 overflow-x-auto">
+                                      <table className="min-w-full text-left text-xs">
+                                        <thead className="text-zinc-500">
+                                          <tr>
+                                            <th className="py-1 pr-3 font-medium">Team</th>
+                                            <th className="py-1 pr-3 font-medium text-right">Week</th>
+                                            <th className="py-1 pr-3 font-medium text-right">Banked</th>
+                                            <th className="py-1 font-medium text-right">Total</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-white/5 text-zinc-200">
+                                          {sorted.map((t) => (
+                                            <tr key={t.uid}>
+                                              <td className="py-1.5 pr-3 font-medium text-white">{t.name}</td>
+                                              <td className="py-1.5 pr-3 text-right tabular-nums">{t.weekPoints}</td>
+                                              <td className="py-1.5 pr-3 text-right tabular-nums">{t.cumulativePoints}</td>
+                                              <td className="py-1.5 text-right tabular-nums font-semibold text-emerald-200">
+                                                {t.total}
+                                              </td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  </div>
+                                );
+                              })}
                             </div>
                           )}
                         </div>

@@ -1352,7 +1352,9 @@ function buildGwPlayerWeekScoresFromHistory(
   return team.players.map((id) => {
     const p = byId.get(id);
     const hist = (p?.history ?? []).find((h) => h.week === gameweek);
-    const scored = playerScoresInGameweek(team, id, gameweek) && Boolean(hist) && !hist?.didNotPlay;
+    // Archived squad = locked XI at End GW. Prefer history row; don't re-apply join gating
+    // (that already decided who was on this snapshot).
+    const scored = Boolean(hist) && !hist?.didNotPlay;
     const base =
       scored && hist
         ? Number.isFinite(Number(hist.points))
@@ -1372,6 +1374,42 @@ function buildGwPlayerWeekScoresFromHistory(
       isViceCaptain,
     };
   });
+}
+
+function sumAppliedWeekPoints(scores: GwPlayerWeekScore[]): number {
+  return Math.round(scores.reduce((s, row) => s + (row.scored ? row.appliedPoints : 0), 0) * 10) / 10;
+}
+
+/** Live week points, falling back to this GW's history row if live stats were already cleared. */
+function computeWeekPointsPreferHistory(
+  team: SavedTeam,
+  byId: Map<number, Player>,
+  scoringGameweek: number,
+): number {
+  let fromLive = 0;
+  let fromHist = 0;
+  let liveAny = false;
+  for (const id of team.players) {
+    if (!playerScoresInGameweek(team, id, scoringGameweek)) continue;
+    const p = byId.get(id);
+    if (!p) continue;
+    const mult = team.captain === id ? 2 : team.viceCaptain === id ? 1.5 : 1;
+    const liveBase = calculatePoints(p);
+    if (liveBase > 0 || p.runs || p.wickets || p.catches || p.wkCatches || p.stumpings || p.runOuts || p.didNotPlay || p.didNotBat) {
+      liveAny = true;
+    }
+    fromLive += liveBase * mult;
+    const hist = (p.history ?? []).find((h) => h.week === scoringGameweek);
+    if (hist && !hist.didNotPlay) {
+      const histBase = Number.isFinite(Number(hist.points)) ? Number(hist.points) : calculatePoints(hist);
+      fromHist += histBase * mult;
+    }
+  }
+  const liveRounded = Math.round(fromLive * 10) / 10;
+  const histRounded = Math.round(fromHist * 10) / 10;
+  if (liveAny && liveRounded > 0) return liveRounded;
+  if (histRounded > 0) return histRounded;
+  return liveRounded;
 }
 
 function computeTeamTotal(team: SavedTeam, byId: Map<number, Player>, scoringGameweek: number) {
@@ -3513,13 +3551,30 @@ export default function Page() {
       const team = gwSnapshotToSavedTeam(ts) as SavedTeam;
       const fielding = squadFieldingSummaryForGameweek(team, playersById, leaderboardGwView, false);
       const playerScores =
-        ts.playerScores && ts.playerScores.length > 0
+        ts.playerScores && ts.playerScores.length > 0 && sumAppliedWeekPoints(ts.playerScores) > 0
           ? ts.playerScores
           : buildGwPlayerWeekScoresFromHistory(team, playersById, leaderboardGwView);
+      const rebuiltWeek = sumAppliedWeekPoints(playerScores);
+      // Prefer rebuilt-from-history when the archived weekPoints were wiped (e.g. End GW ran twice).
+      const weekPts =
+        ts.weekPoints > 0
+          ? Math.round(ts.weekPoints * 10) / 10
+          : rebuiltWeek > 0
+            ? rebuiltWeek
+            : Math.round(ts.weekPoints * 10) / 10;
+      const totalFromArchive = Math.round(ts.cumulativePointsAfter * 10) / 10;
+      // If week was wiped to 0 but banked total still includes the old week, keep archive total;
+      // if week was wiped and cumulativeAfter also looks short, prefer before + rebuilt week.
+      const total =
+        ts.weekPoints > 0
+          ? totalFromArchive
+          : rebuiltWeek > 0
+            ? Math.round((Number(ts.cumulativePointsBefore ?? 0) + rebuiltWeek) * 10) / 10
+            : totalFromArchive;
       return {
         team,
-        weekPts: Math.round(ts.weekPoints * 10) / 10,
-        total: Math.round(ts.cumulativePointsAfter * 10) / 10,
+        weekPts,
+        total,
         capName: ts.captain ? playersById.get(ts.captain)?.name ?? "—" : "—",
         vcName: ts.viceCaptain ? playersById.get(ts.viceCaptain)?.name ?? "—" : "—",
         fieldingLabel: formatSquadFieldingSummary(fielding),
@@ -4396,7 +4451,7 @@ export default function Page() {
         const teamSnapshots: GwTeamSnapshot[] = [];
         const teamBatch = writeBatch(db);
         for (const team of teams) {
-          const weekPts = computeWeekPoints(team, playersByIdForGw, gw);
+          const weekPts = computeWeekPointsPreferHistory(team, playersByIdForGw, gw);
           const baseline =
             team.transferBaselinePlayers?.length === SQUAD_SIZE ? team.transferBaselinePlayers : team.players;
           const TEnd = countOutgoingPlayerChanges(baseline, team.players);
@@ -4568,13 +4623,14 @@ export default function Page() {
     }
     if (
       !window.confirm(
-        `Rebuild per-player scores on every archived gameweek (${completedGameweeks.join(", ")}) from each player's history? This only updates gwTeams archives — it does not change live totals.`,
+        `Rebuild GW points + per-player scores on every archived gameweek (${completedGameweeks.join(", ")}) from each player's history?\n\n` +
+          `This fixes archives where “GW points” show 0 after a failed/repeated End GW. It updates gwTeams only — live team totals are not changed unless you also fix them in Firebase.`,
       )
     ) {
       return;
     }
     try {
-      await runAction("Backfill archived player scores", async () => {
+      await runAction("Repair archived GW points from history", async () => {
         if (!authUser) throw new Error("Sign in required.");
         await assertLeagueAdminFirestoreAccess(authUser);
         for (const gw of completedGameweeks) {
@@ -4585,12 +4641,30 @@ export default function Page() {
           if (!gwDoc?.teams.length) continue;
           const teams = gwDoc.teams.map((ts) => {
             const team = gwSnapshotToSavedTeam(ts) as SavedTeam;
+            const playerScores = buildGwPlayerWeekScoresFromHistory(team, playersById, gw);
+            const rebuiltWeek = sumAppliedWeekPoints(playerScores);
+            const weekPoints = ts.weekPoints > 0 ? ts.weekPoints : rebuiltWeek;
+            const cumulativePointsAfter =
+              ts.weekPoints > 0
+                ? ts.cumulativePointsAfter
+                : Math.round((Number(ts.cumulativePointsBefore ?? 0) + weekPoints) * 10) / 10;
             return {
               ...ts,
-              playerScores: buildGwPlayerWeekScoresFromHistory(team, playersById, gw),
+              playerScores,
+              weekPoints,
+              cumulativePointsAfter,
             };
           });
-          await setDoc(gwRef, { ...gwSnap.data(), teams }, { merge: true });
+          await setDoc(
+            gwRef,
+            {
+              ...gwSnap.data(),
+              teams,
+              scoresRepairedAt: serverTimestamp(),
+              scoresRepairedBy: authUser.uid,
+            },
+            { merge: true },
+          );
         }
       });
     } catch {
@@ -6109,7 +6183,7 @@ export default function Page() {
                           disabled={completedGameweeks.length === 0}
                           className="rounded-2xl bg-sky-600/90 px-4 py-3 text-sm font-bold text-white ring-1 ring-sky-500/40 hover:bg-sky-500 disabled:opacity-50"
                         >
-                          Backfill who-scored-what on archives
+                          Backfill / repair archived GW points
                         </button>
                         <button type="button" onClick={() => void bulkAvailability(true)}
                           className="rounded-2xl bg-white/5 px-4 py-3 text-sm font-bold text-zinc-200 ring-1 ring-white/10 hover:bg-white/10">

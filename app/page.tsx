@@ -100,6 +100,7 @@ import {
   parseGwTeamsDoc,
   rankMovement,
   squadMatchesGwSnapshot,
+  type GwPlayerWeekScore,
   type GwTeamSnapshot,
   type GwTeamsDoc,
 } from "@/lib/gwTeams";
@@ -1318,6 +1319,61 @@ function computeWeekPoints(team: SavedTeam, byId: Map<number, Player>, scoringGa
   return Math.round(total * 10) / 10;
 }
 
+function buildGwPlayerWeekScores(
+  team: SavedTeam,
+  byId: Map<number, Player>,
+  scoringGameweek: number,
+): GwPlayerWeekScore[] {
+  return team.players.map((id) => {
+    const p = byId.get(id);
+    const scored = playerScoresInGameweek(team, id, scoringGameweek);
+    const base = scored && p ? calculatePoints(p) : 0;
+    const isCaptain = team.captain === id;
+    const isViceCaptain = team.viceCaptain === id;
+    const mult = isCaptain ? 2 : isViceCaptain ? 1.5 : 1;
+    return {
+      id,
+      name: p?.name ?? `Player ${id}`,
+      basePoints: Math.round(base * 10) / 10,
+      appliedPoints: Math.round(base * mult * 10) / 10,
+      scored,
+      isCaptain,
+      isViceCaptain,
+    };
+  });
+}
+
+/** Rebuild per-player GW scores from each player's history row (for older archives). */
+function buildGwPlayerWeekScoresFromHistory(
+  team: SavedTeam,
+  byId: Map<number, Player>,
+  gameweek: number,
+): GwPlayerWeekScore[] {
+  return team.players.map((id) => {
+    const p = byId.get(id);
+    const hist = (p?.history ?? []).find((h) => h.week === gameweek);
+    const scored = playerScoresInGameweek(team, id, gameweek) && Boolean(hist) && !hist?.didNotPlay;
+    const base =
+      scored && hist
+        ? Number.isFinite(Number(hist.points))
+          ? Number(hist.points)
+          : calculatePoints(hist)
+        : 0;
+    const isCaptain = team.captain === id;
+    const isViceCaptain = team.viceCaptain === id;
+    const mult = isCaptain ? 2 : isViceCaptain ? 1.5 : 1;
+    return {
+      id,
+      name: p?.name ?? `Player ${id}`,
+      basePoints: Math.round(base * 10) / 10,
+      appliedPoints: Math.round(base * mult * 10) / 10,
+      scored,
+      isCaptain,
+      isViceCaptain,
+    };
+  });
+}
+
 function computeTeamTotal(team: SavedTeam, byId: Map<number, Player>, scoringGameweek: number) {
   return Math.round((computeWeekPoints(team, byId, scoringGameweek) + (team.cumulativePoints ?? 0)) * 10) / 10;
 }
@@ -1484,6 +1540,16 @@ type LeaderboardRow = {
   vcName: string;
   fieldingLabel: string | null;
   health?: SavedTeamHealth;
+  /** Present on archived GW rows — per-player scores frozen at End GW. */
+  playerScores?: GwPlayerWeekScore[];
+};
+
+type TeamModalState = {
+  team: SavedTeam;
+  gameweek: number;
+  live: boolean;
+  playerScores?: GwPlayerWeekScore[];
+  weekPts?: number;
 };
 
 function evaluateSavedTeamHealth(
@@ -2477,7 +2543,7 @@ export default function Page() {
   const emptyPlayersSeedInFlightRef = useRef(false);
 
   // Leaderboard: view another team's XI
-  const [teamModal, setTeamModal] = useState<SavedTeam | null>(null);
+  const [teamModal, setTeamModal] = useState<TeamModalState | null>(null);
   /** "live" = current squads; number = completed GW from gwTeams archive. */
   const [leaderboardGwView, setLeaderboardGwView] = useState<number | "live">("live");
   const [gwTeamsArchive, setGwTeamsArchive] = useState<GwTeamsDoc[]>([]);
@@ -3446,6 +3512,10 @@ export default function Page() {
     const rows: LeaderboardRow[] = doc.teams.map((ts) => {
       const team = gwSnapshotToSavedTeam(ts) as SavedTeam;
       const fielding = squadFieldingSummaryForGameweek(team, playersById, leaderboardGwView, false);
+      const playerScores =
+        ts.playerScores && ts.playerScores.length > 0
+          ? ts.playerScores
+          : buildGwPlayerWeekScoresFromHistory(team, playersById, leaderboardGwView);
       return {
         team,
         weekPts: Math.round(ts.weekPoints * 10) / 10,
@@ -3453,6 +3523,7 @@ export default function Page() {
         capName: ts.captain ? playersById.get(ts.captain)?.name ?? "—" : "—",
         vcName: ts.viceCaptain ? playersById.get(ts.viceCaptain)?.name ?? "—" : "—",
         fieldingLabel: formatSquadFieldingSummary(fielding),
+        playerScores,
       };
     });
     rows.sort((a, b) => b.weekPts - a.weekPts || b.total - a.total || a.team.name.localeCompare(b.team.name));
@@ -3486,6 +3557,32 @@ export default function Page() {
     const xi = bestXiForGameweek(pool, viewingGameweek, live);
     return { gameweek: viewingGameweek, players: xi, provisional: live };
   }, [leaderboardGwView, viewingGameweek, scoringPlayersById, players]);
+
+  /** Full list of who scored what in the selected gameweek (raw player points). */
+  const gwAllPlayerScores = useMemo(() => {
+    const live = leaderboardGwView === "live";
+    const pool = live ? scoringPlayers : players;
+    const rows: { id: number; name: string; role: PlayerRole; points: number }[] = [];
+    for (const p of pool) {
+      const hist = (p.history ?? []).find((h) => h.week === viewingGameweek);
+      let points = 0;
+      if (hist) {
+        if (hist.didNotPlay) continue;
+        points = Number.isFinite(Number(hist.points)) ? Number(hist.points) : calculatePoints(hist);
+      } else if (live) {
+        if (p.didNotPlay) continue;
+        points = calculatePoints(p);
+      } else {
+        continue;
+      }
+      if (points <= 0) continue;
+      rows.push({ id: p.id, name: p.name, role: p.role, points: Math.round(points * 10) / 10 });
+    }
+    rows.sort((a, b) => b.points - a.points || a.name.localeCompare(b.name));
+    return rows;
+  }, [leaderboardGwView, viewingGameweek, scoringPlayers, players]);
+
+  const [showAllGwScores, setShowAllGwScores] = useState(false);
 
   const gwBestXiHistory = useMemo(
     () =>
@@ -4063,14 +4160,18 @@ export default function Page() {
             cumulativePoints: t.cumulativePoints ?? 0,
           }),
         );
-        await addDoc(collection(db, "pointsBackups"), {
-          gameweek: currentGameweek,
-          kind: "live-stats-save",
-          createdAt: serverTimestamp(),
-          createdBy: authUser?.uid ?? null,
-          label: `Live totals after Save stats · GW${currentGameweek}`,
-          teams: backupTeams,
-        });
+        try {
+          await addDoc(collection(db, "pointsBackups"), {
+            gameweek: currentGameweek,
+            kind: "live-stats-save",
+            createdAt: serverTimestamp(),
+            createdBy: authUser?.uid ?? null,
+            label: `Live totals after Save stats · GW${currentGameweek}`,
+            teams: backupTeams,
+          });
+        } catch (e: unknown) {
+          console.warn("pointsBackups write skipped:", e instanceof Error ? e.message : e);
+        }
 
         if (pendingDnpHistoryRepairRef.current) {
           await setDoc(
@@ -4329,6 +4430,7 @@ export default function Page() {
             freeTransfersAtGwStart: F,
             transferPenaltyPointsApplied: team.transferPenaltyPointsApplied ?? 0,
             playerJoinedGameweek: team.playerJoinedGameweek ? { ...team.playerJoinedGameweek } : {},
+            playerScores: buildGwPlayerWeekScores(team, playersByIdForGw, gw),
           });
           teamBatch.update(doc(db, "teams", team.uid), {
             name: team.name,
@@ -4431,10 +4533,9 @@ export default function Page() {
             ),
           });
         } catch (e: unknown) {
+          // Don't block End GW if points backup rules aren't published yet.
           const msg = e instanceof Error ? e.message : String(e);
-          throw new Error(
-            `pointsBackups write — ${msg}. Publish firestore.rules including match /pointsBackups/{backupId}.`,
-          );
+          console.warn(`pointsBackups write skipped: ${msg}`);
         }
         try {
           await setDoc(
@@ -4457,6 +4558,43 @@ export default function Page() {
       setTab("draft");
     } catch {
       /* runAction already set actionError */
+    }
+  }
+
+  async function backfillArchivedPlayerScores() {
+    if (completedGameweeks.length === 0) {
+      setActionError("No archived gameweeks in gwTeams yet.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Rebuild per-player scores on every archived gameweek (${completedGameweeks.join(", ")}) from each player's history? This only updates gwTeams archives — it does not change live totals.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await runAction("Backfill archived player scores", async () => {
+        if (!authUser) throw new Error("Sign in required.");
+        await assertLeagueAdminFirestoreAccess(authUser);
+        for (const gw of completedGameweeks) {
+          const gwRef = doc(db, "gwTeams", String(gw));
+          const gwSnap = await getDoc(gwRef);
+          if (!gwSnap.exists()) continue;
+          const gwDoc = parseGwTeamsDoc(gwSnap.data() as Record<string, unknown>);
+          if (!gwDoc?.teams.length) continue;
+          const teams = gwDoc.teams.map((ts) => {
+            const team = gwSnapshotToSavedTeam(ts) as SavedTeam;
+            return {
+              ...ts,
+              playerScores: buildGwPlayerWeekScoresFromHistory(team, playersById, gw),
+            };
+          });
+          await setDoc(gwRef, { ...gwSnap.data(), teams }, { merge: true });
+        }
+      });
+    } catch {
+      /* runAction sets actionError */
     }
   }
 
@@ -5375,6 +5513,67 @@ export default function Page() {
                     </div>
                   ) : null}
 
+                  <div className="mb-4 rounded-2xl bg-white/5 p-4 ring-1 ring-white/10 sm:p-5">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <div className="text-sm font-semibold text-white">
+                          Who scored what — GW{viewingGameweek}
+                          {leaderboardGwView === "live" ? " (live)" : ""}
+                        </div>
+                        <p className="mt-0.5 text-xs text-zinc-500">
+                          Raw player fantasy points this gameweek (no captain boost). Open a team with View squad for C/VC applied scores.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowAllGwScores((v) => !v)}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-white/5 px-3 py-2 text-xs font-semibold text-zinc-200 ring-1 ring-white/10 hover:bg-white/10"
+                      >
+                        {showAllGwScores ? (
+                          <>
+                            Hide <ChevronUp className="h-3.5 w-3.5" />
+                          </>
+                        ) : (
+                          <>
+                            Show all ({gwAllPlayerScores.length}) <ChevronDown className="h-3.5 w-3.5" />
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    {showAllGwScores ? (
+                      gwAllPlayerScores.length === 0 ? (
+                        <p className="mt-3 text-sm text-zinc-500">
+                          No player scores found for GW{viewingGameweek}. If this week was ended, check each player&apos;s history in Admin; if it&apos;s still live, Save stats first.
+                        </p>
+                      ) : (
+                        <div className="mt-3 max-h-80 overflow-y-auto rounded-xl ring-1 ring-white/10">
+                          <table className="min-w-full text-left text-sm">
+                            <thead className="sticky top-0 bg-zinc-950 text-xs text-zinc-500">
+                              <tr>
+                                <th className="px-3 py-2 font-medium">#</th>
+                                <th className="px-3 py-2 font-medium">Player</th>
+                                <th className="px-3 py-2 font-medium">Role</th>
+                                <th className="px-3 py-2 font-medium text-right">Pts</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-white/5">
+                              {gwAllPlayerScores.map((row, idx) => (
+                                <tr key={row.id} className="text-zinc-200">
+                                  <td className="px-3 py-2 text-zinc-500">{idx + 1}</td>
+                                  <td className="px-3 py-2 font-medium text-white">{row.name}</td>
+                                  <td className="px-3 py-2 text-zinc-400">{ROLE_LABEL[row.role]}</td>
+                                  <td className="px-3 py-2 text-right font-bold tabular-nums text-emerald-200">
+                                    {row.points}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )
+                    ) : null}
+                  </div>
+
                   {gwBestXiHistory.length > 0 ? (
                     <div className="mb-4 rounded-2xl bg-white/5 p-3 ring-1 ring-white/10">
                       <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Past best XI (top scorer)</div>
@@ -5530,7 +5729,15 @@ export default function Page() {
                               </div>
                               <button
                                 type="button"
-                                onClick={() => setTeamModal(row.team)}
+                                onClick={() =>
+                                  setTeamModal({
+                                    team: row.team,
+                                    gameweek: viewingGameweek,
+                                    live: leaderboardGwView === "live",
+                                    playerScores: row.playerScores,
+                                    weekPts: row.weekPts,
+                                  })
+                                }
                                 className="rounded-xl bg-white/5 px-3 py-2 text-xs font-semibold text-zinc-200 ring-1 ring-white/10 hover:bg-white/10"
                               >
                                 View squad
@@ -5895,6 +6102,14 @@ export default function Page() {
                           ].join(" ")}
                         >
                           Restore squads from last GW snapshot
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void backfillArchivedPlayerScores()}
+                          disabled={completedGameweeks.length === 0}
+                          className="rounded-2xl bg-sky-600/90 px-4 py-3 text-sm font-bold text-white ring-1 ring-sky-500/40 hover:bg-sky-500 disabled:opacity-50"
+                        >
+                          Backfill who-scored-what on archives
                         </button>
                         <button type="button" onClick={() => void bulkAvailability(true)}
                           className="rounded-2xl bg-white/5 px-4 py-3 text-sm font-bold text-zinc-200 ring-1 ring-white/10 hover:bg-white/10">
@@ -6870,12 +7085,23 @@ export default function Page() {
           >
             <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/10 px-5 py-4">
               <div className="min-w-0">
-                <div id="team-modal-title" className="truncate text-lg font-bold">{teamModal.name}</div>
+                <div id="team-modal-title" className="truncate text-lg font-bold">{teamModal.team.name}</div>
                 <div className="mt-0.5 text-xs text-zinc-400">
                   Owner{" "}
                   <span className="font-semibold text-zinc-200">
-                    {resolveOwnerDisplayName(teamModal, authUser)}
+                    {resolveOwnerDisplayName(teamModal.team, authUser)}
                   </span>
+                  {" · "}
+                  <span className="font-semibold text-zinc-200">
+                    GW{teamModal.gameweek}
+                    {teamModal.live ? " (live)" : " (archive)"}
+                  </span>
+                  {teamModal.weekPts != null ? (
+                    <>
+                      {" · "}
+                      <span className="font-semibold text-emerald-200">{teamModal.weekPts} pts</span>
+                    </>
+                  ) : null}
                 </div>
               </div>
               <button
@@ -6890,44 +7116,85 @@ export default function Page() {
 
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
               <div className="grid gap-2">
-                {(teamModal.players ?? []).map((pid) => {
-                  const modalLive = leaderboardGwView === "live";
-                  const modalGw = modalLive ? currentGameweek : leaderboardGwView;
-                  const pool = modalLive ? scoringPlayersById : playersById;
+                {(teamModal.team.players ?? []).map((pid) => {
+                  const frozen = teamModal.playerScores?.find((s) => s.id === pid);
+                  const pool = teamModal.live ? scoringPlayersById : playersById;
                   const p = pool.get(pid);
-                  if (!p) return null;
-                  const hist = !modalLive ? (p.history ?? []).find((h) => h.week === modalGw) : null;
-                  const statLine = hist ?? p;
-                  const scoresThisGw = playerScoresInGameweek(teamModal, pid, modalGw);
-                  const fieldingLabel = scoresThisGw ? formatSquadFieldingSummary(squadFieldingFromStatLine(statLine)) : null;
-                  const basePts = scoresThisGw ? calculatePoints(statLine) : 0;
-                  const isC = teamModal.captain === pid;
-                  const isVC = teamModal.viceCaptain === pid;
-                  const isWK = teamModal.keeper === pid;
+                  const hist = !teamModal.live
+                    ? (p?.history ?? []).find((h) => h.week === teamModal.gameweek)
+                    : null;
+                  const scoresThisGw = frozen
+                    ? frozen.scored
+                    : playerScoresInGameweek(teamModal.team, pid, teamModal.gameweek);
+                  let basePts = 0;
+                  let appliedPts = 0;
+                  let name = frozen?.name ?? p?.name ?? `Player ${pid}`;
+                  if (frozen) {
+                    basePts = frozen.basePoints;
+                    appliedPts = frozen.appliedPoints;
+                  } else if (teamModal.live && p) {
+                    basePts = scoresThisGw ? calculatePoints(p) : 0;
+                    const mult =
+                      teamModal.team.captain === pid ? 2 : teamModal.team.viceCaptain === pid ? 1.5 : 1;
+                    appliedPts = Math.round(basePts * mult * 10) / 10;
+                  } else if (hist) {
+                    basePts = scoresThisGw
+                      ? Number.isFinite(Number(hist.points))
+                        ? Number(hist.points)
+                        : calculatePoints(hist)
+                      : 0;
+                    const mult =
+                      teamModal.team.captain === pid ? 2 : teamModal.team.viceCaptain === pid ? 1.5 : 1;
+                    appliedPts = Math.round(basePts * mult * 10) / 10;
+                  }
+                  const isC = frozen?.isCaptain ?? teamModal.team.captain === pid;
+                  const isVC = frozen?.isViceCaptain ?? teamModal.team.viceCaptain === pid;
+                  const isWK = teamModal.team.keeper === pid;
+                  const fieldingLabel =
+                    scoresThisGw && (hist || (teamModal.live && p))
+                      ? formatSquadFieldingSummary(
+                          squadFieldingFromStatLine(hist ?? (p as Player)),
+                        )
+                      : null;
+                  const missingRecord = !teamModal.live && !frozen && !hist;
                   return (
                     <div key={pid} className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3 ring-1 ring-white/10">
                       <div className="min-w-0">
-                        <div className="truncate font-semibold text-white">{p.name}</div>
+                        <div className="truncate font-semibold text-white">{name}</div>
                         <div className="mt-1 flex flex-wrap gap-2 text-xs">
-                          <Pill>{money(p.price)}{p.priceDelta ? (p.priceDelta > 0 ? ` (+${p.priceDelta})` : ` (${p.priceDelta})`) : ""}</Pill>
-                          <Pill tone="amber">{ROLE_LABEL[p.role]}</Pill>
-                          <Pill tone={p.teamTier === 1 ? "blue" : "neutral"}>{TEAM_TIER_SHORT[p.teamTier]}</Pill>
-                          {isC ? <Pill tone="red">C</Pill> : null}
-                          {isVC ? <Pill tone="amber">VC</Pill> : null}
+                          {p ? (
+                            <>
+                              <Pill>
+                                {money(p.price)}
+                                {p.priceDelta ? (p.priceDelta > 0 ? ` (+${p.priceDelta})` : ` (${p.priceDelta})`) : ""}
+                              </Pill>
+                              <Pill tone="amber">{ROLE_LABEL[p.role]}</Pill>
+                              <Pill tone={p.teamTier === 1 ? "blue" : "neutral"}>{TEAM_TIER_SHORT[p.teamTier]}</Pill>
+                            </>
+                          ) : null}
+                          {isC ? <Pill tone="red">C ×2</Pill> : null}
+                          {isVC ? <Pill tone="amber">VC ×1.5</Pill> : null}
                           {isWK ? <Pill tone="blue">WK</Pill> : null}
                           {fieldingLabel ? <Pill tone="green">{fieldingLabel}</Pill> : null}
+                          {!scoresThisGw ? <Pill tone="neutral">Did not score this GW</Pill> : null}
+                          {missingRecord ? <Pill tone="amber">No GW{teamModal.gameweek} record</Pill> : null}
                         </div>
                       </div>
                       <div className="text-right">
-                        <div className="text-xs font-medium text-zinc-400">Base pts</div>
-                        <div className="text-base font-black text-white">{basePts}</div>
+                        <div className="text-xs font-medium text-zinc-400">
+                          {isC || isVC ? "Applied" : "Points"}
+                        </div>
+                        <div className="text-base font-black text-white">{appliedPts}</div>
+                        {isC || isVC ? (
+                          <div className="text-[10px] text-zinc-500">base {basePts}</div>
+                        ) : null}
                       </div>
                     </div>
                   );
                 })}
               </div>
               <div className="mt-4 text-xs text-zinc-500">
-                <span className="text-zinc-300">Base points</span> only — captain (2×) and vice-captain (1.5×) boosts count on the leaderboard, not in this list.
+                Points shown with captain (2×) / vice-captain (1.5×) applied. Archived weeks use the locked End GW snapshot when available.
               </div>
             </div>
 

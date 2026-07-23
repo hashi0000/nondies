@@ -7,6 +7,17 @@ import {
 import { FREE_TRANSFERS_PER_WEEK } from "./leagueConfig";
 
 /** One manager's locked squad for a completed gameweek. */
+export type GwPlayerWeekScore = {
+  id: number;
+  name: string;
+  basePoints: number;
+  /** After C / VC multiplier for this squad. */
+  appliedPoints: number;
+  scored: boolean;
+  isCaptain?: boolean;
+  isViceCaptain?: boolean;
+};
+
 export type GwTeamSnapshot = {
   uid: string;
   name: string;
@@ -22,6 +33,8 @@ export type GwTeamSnapshot = {
   freeTransfersAtGwStart: number;
   transferPenaltyPointsApplied?: number;
   playerJoinedGameweek?: Record<string, number>;
+  /** Per-player fantasy points for this GW (stored at End GW so archives stay readable). */
+  playerScores?: GwPlayerWeekScore[];
 };
 
 export type GwTeamsDoc = {
@@ -173,6 +186,25 @@ export function parseGwTeamsDoc(raw: Record<string, unknown>): GwTeamsDoc | null
         row.playerJoinedGameweek && typeof row.playerJoinedGameweek === "object"
           ? (row.playerJoinedGameweek as Record<string, number>)
           : undefined,
+      playerScores: Array.isArray(row.playerScores)
+        ? row.playerScores
+            .map((ps) => {
+              if (!ps || typeof ps !== "object") return null;
+              const s = ps as Record<string, unknown>;
+              const id = Number(s.id);
+              if (!Number.isFinite(id)) return null;
+              return {
+                id,
+                name: String(s.name ?? `Player ${id}`),
+                basePoints: Number(s.basePoints ?? 0),
+                appliedPoints: Number(s.appliedPoints ?? s.basePoints ?? 0),
+                scored: s.scored !== false,
+                isCaptain: Boolean(s.isCaptain),
+                isViceCaptain: Boolean(s.isViceCaptain),
+              };
+            })
+            .filter((x): x is NonNullable<typeof x> => x != null)
+        : undefined,
     });
   }
   return {

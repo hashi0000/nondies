@@ -1,11 +1,14 @@
 import { calculatePoints, type FantasyStatLine } from "@/lib/fantasyPoints";
+import { parseShopForScoring, scoreSquadWithShop, sumAppliedShopScores } from "@/lib/shopScoring";
 
 export type PointsTeam = {
+  uid?: string;
   players: number[];
   captain: number | null;
   viceCaptain: number | null;
   cumulativePoints?: number;
   playerJoinedGameweek?: Record<string, unknown>;
+  fantasyShop?: unknown;
 };
 
 function playerFirstGameweekOnTeam(team: PointsTeam, playerId: number): number {
@@ -33,15 +36,19 @@ export function computeWeekTeamPoints(
   playerById: Map<number, FantasyStatLine>,
   scoringGameweek: number,
 ): number {
-  let total = 0;
-  for (const id of team.players) {
-    if (!playerScoresInGameweek(team, id, scoringGameweek)) continue;
-    const p = playerById.get(id);
-    if (!p) continue;
-    const base = calculatePoints(p);
-    total += base * (team.captain === id ? 2 : team.viceCaptain === id ? 1.5 : 1);
-  }
-  return Math.round(total * 10) / 10;
+  const shop = parseShopForScoring(team.fantasyShop, scoringGameweek);
+  const teamUid = team.uid ?? "";
+  const scores = scoreSquadWithShop({
+    team,
+    shop,
+    squadPlayerIds: team.players,
+    teamUid,
+    players: team.players.map((id) => {
+      const scored = playerScoresInGameweek(team, id, scoringGameweek);
+      return { id, line: scored ? (playerById.get(id) ?? null) : null, scored };
+    }),
+  });
+  return sumAppliedShopScores(scores);
 }
 
 /** Total league points earned so far — completed GWs + this week's live score. */

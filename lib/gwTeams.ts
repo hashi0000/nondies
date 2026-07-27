@@ -11,11 +11,13 @@ export type GwPlayerWeekScore = {
   id: number;
   name: string;
   basePoints: number;
-  /** After C / VC multiplier for this squad. */
+  /** After C / VC / shop multipliers for this squad. */
   appliedPoints: number;
   scored: boolean;
   isCaptain?: boolean;
   isViceCaptain?: boolean;
+  isLuckyDip?: boolean;
+  isPowerplay?: boolean;
 };
 
 export type GwTeamSnapshot = {

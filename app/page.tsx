@@ -63,6 +63,7 @@ import {
   type TeamPointsBackupDoc,
 } from "@/lib/teamPointsBackup";
 import { parseTeamFantasyShop, type ShopItemId } from "@/lib/fantasyShop";
+import { isLuckyDipPlayer, parseShopForScoring, scoreSquadWithShop, sumAppliedShopScores, effectiveFreeTransfersForShop } from "@/lib/shopScoring";
 import { totalEarnedFantasyPoints } from "@/lib/teamFantasyPoints";
 import {
   FREE_TRANSFERS_PER_WEEK,
@@ -1308,15 +1309,19 @@ function buildPlayerJoinedGameweekAfterSave(
 }
 
 function computeWeekPoints(team: SavedTeam, byId: Map<number, Player>, scoringGameweek: number) {
-  let total = 0;
-  for (const id of team.players) {
-    if (!playerScoresInGameweek(team, id, scoringGameweek)) continue;
-    const p = byId.get(id);
-    if (!p) continue;
-    const base = calculatePoints(p);
-    total += base * (team.captain === id ? 2 : team.viceCaptain === id ? 1.5 : 1);
-  }
-  return Math.round(total * 10) / 10;
+  const shop = parseShopForScoring(team.fantasyShop, scoringGameweek);
+  const scores = scoreSquadWithShop({
+    team,
+    shop,
+    squadPlayerIds: team.players,
+    teamUid: team.uid,
+    players: team.players.map((id) => {
+      const scored = playerScoresInGameweek(team, id, scoringGameweek);
+      const p = byId.get(id);
+      return { id, line: scored && p ? p : null, scored };
+    }),
+  });
+  return sumAppliedShopScores(scores);
 }
 
 function buildGwPlayerWeekScores(
@@ -1324,21 +1329,30 @@ function buildGwPlayerWeekScores(
   byId: Map<number, Player>,
   scoringGameweek: number,
 ): GwPlayerWeekScore[] {
-  return team.players.map((id) => {
-    const p = byId.get(id);
-    const scored = playerScoresInGameweek(team, id, scoringGameweek);
-    const base = scored && p ? calculatePoints(p) : 0;
-    const isCaptain = team.captain === id;
-    const isViceCaptain = team.viceCaptain === id;
-    const mult = isCaptain ? 2 : isViceCaptain ? 1.5 : 1;
+  const shop = parseShopForScoring(team.fantasyShop, scoringGameweek);
+  const scoredRows = scoreSquadWithShop({
+    team,
+    shop,
+    squadPlayerIds: team.players,
+    teamUid: team.uid,
+    players: team.players.map((id) => {
+      const scored = playerScoresInGameweek(team, id, scoringGameweek);
+      const p = byId.get(id);
+      return { id, line: scored && p ? p : null, scored };
+    }),
+  });
+  return scoredRows.map((row) => {
+    const p = byId.get(row.id);
     return {
-      id,
-      name: p?.name ?? `Player ${id}`,
-      basePoints: Math.round(base * 10) / 10,
-      appliedPoints: Math.round(base * mult * 10) / 10,
-      scored,
-      isCaptain,
-      isViceCaptain,
+      id: row.id,
+      name: p?.name ?? `Player ${row.id}`,
+      basePoints: row.basePoints,
+      appliedPoints: row.appliedPoints,
+      scored: row.scored,
+      isCaptain: row.isCaptain,
+      isViceCaptain: row.isViceCaptain,
+      isLuckyDip: row.isLuckyDip,
+      isPowerplay: row.isPowerplay,
     };
   });
 }
@@ -1349,29 +1363,31 @@ function buildGwPlayerWeekScoresFromHistory(
   byId: Map<number, Player>,
   gameweek: number,
 ): GwPlayerWeekScore[] {
-  return team.players.map((id) => {
-    const p = byId.get(id);
-    const hist = (p?.history ?? []).find((h) => h.week === gameweek);
-    // Archived squad = locked XI at End GW. Prefer history row; don't re-apply join gating
-    // (that already decided who was on this snapshot).
-    const scored = Boolean(hist) && !hist?.didNotPlay;
-    const base =
-      scored && hist
-        ? Number.isFinite(Number(hist.points))
-          ? Number(hist.points)
-          : calculatePoints(hist)
-        : 0;
-    const isCaptain = team.captain === id;
-    const isViceCaptain = team.viceCaptain === id;
-    const mult = isCaptain ? 2 : isViceCaptain ? 1.5 : 1;
+  const shop = parseShopForScoring(team.fantasyShop, gameweek);
+  const scoredRows = scoreSquadWithShop({
+    team,
+    shop,
+    squadPlayerIds: team.players,
+    teamUid: team.uid,
+    players: team.players.map((id) => {
+      const p = byId.get(id);
+      const hist = (p?.history ?? []).find((h) => h.week === gameweek);
+      const scored = Boolean(hist) && !hist?.didNotPlay;
+      return { id, line: scored && hist ? hist : null, scored };
+    }),
+  });
+  return scoredRows.map((row) => {
+    const p = byId.get(row.id);
     return {
-      id,
-      name: p?.name ?? `Player ${id}`,
-      basePoints: Math.round(base * 10) / 10,
-      appliedPoints: Math.round(base * mult * 10) / 10,
-      scored,
-      isCaptain,
-      isViceCaptain,
+      id: row.id,
+      name: p?.name ?? `Player ${row.id}`,
+      basePoints: row.basePoints,
+      appliedPoints: row.appliedPoints,
+      scored: row.scored,
+      isCaptain: row.isCaptain,
+      isViceCaptain: row.isViceCaptain,
+      isLuckyDip: row.isLuckyDip,
+      isPowerplay: row.isPowerplay,
     };
   });
 }
@@ -1386,27 +1402,49 @@ function computeWeekPointsPreferHistory(
   byId: Map<number, Player>,
   scoringGameweek: number,
 ): number {
-  let fromLive = 0;
-  let fromHist = 0;
+  const shop = parseShopForScoring(team.fantasyShop, scoringGameweek);
+  const liveInputs = team.players.map((id) => {
+    const scored = playerScoresInGameweek(team, id, scoringGameweek);
+    const p = byId.get(id);
+    return { id, line: scored && p ? p : null, scored };
+  });
+  const liveScores = scoreSquadWithShop({
+    team,
+    shop,
+    squadPlayerIds: team.players,
+    teamUid: team.uid,
+    players: liveInputs,
+  });
   let liveAny = false;
   for (const id of team.players) {
     if (!playerScoresInGameweek(team, id, scoringGameweek)) continue;
     const p = byId.get(id);
     if (!p) continue;
-    const mult = team.captain === id ? 2 : team.viceCaptain === id ? 1.5 : 1;
     const liveBase = calculatePoints(p);
     if (liveBase > 0 || p.runs || p.wickets || p.catches || p.wkCatches || p.stumpings || p.runOuts || p.didNotPlay || p.didNotBat) {
       liveAny = true;
-    }
-    fromLive += liveBase * mult;
-    const hist = (p.history ?? []).find((h) => h.week === scoringGameweek);
-    if (hist && !hist.didNotPlay) {
-      const histBase = Number.isFinite(Number(hist.points)) ? Number(hist.points) : calculatePoints(hist);
-      fromHist += histBase * mult;
+      break;
     }
   }
-  const liveRounded = Math.round(fromLive * 10) / 10;
-  const histRounded = Math.round(fromHist * 10) / 10;
+  const liveRounded = sumAppliedShopScores(liveScores);
+
+  const histScores = scoreSquadWithShop({
+    team,
+    shop,
+    squadPlayerIds: team.players,
+    teamUid: team.uid,
+    players: team.players.map((id) => {
+      if (!playerScoresInGameweek(team, id, scoringGameweek)) {
+        return { id, line: null, scored: false };
+      }
+      const p = byId.get(id);
+      const hist = (p?.history ?? []).find((h) => h.week === scoringGameweek);
+      const scored = Boolean(hist) && !hist?.didNotPlay;
+      return { id, line: scored && hist ? hist : null, scored };
+    }),
+  });
+  const histRounded = sumAppliedShopScores(histScores);
+
   if (liveAny && liveRounded > 0) return liveRounded;
   if (histRounded > 0) return histRounded;
   return liveRounded;
@@ -1951,8 +1989,11 @@ function buildTransferSavePreview(
     return { kind: "first" as const, penaltiesApply };
   }
   const baseline = squadTransferBaseline(mySavedTeam, penaltiesApply, currentGameweek);
-  const F =
-    resolveFreeTransfersAtGwStart(mySavedTeam.freeTransfersAtGwStart);
+  const shop = parseShopForScoring(mySavedTeam.fantasyShop, currentGameweek);
+  const F = effectiveFreeTransfersForShop(
+    resolveFreeTransfersAtGwStart(mySavedTeam.freeTransfersAtGwStart),
+    shop,
+  );
   const T = countOutgoingPlayerChanges(baseline, selected);
   const extras = penaltiesApply ? transferExtrasAgainstFree(T, F) : 0;
   const penaltyDue = penaltiesApply ? penaltyPointsForExtras(extras) : 0;
@@ -3495,11 +3536,15 @@ export default function Page() {
     return { gw1Open, newJoinGrace, pricingAmnesty: pricingAmnestyActive };
   }, [currentGameweek, mySavedTeam, lockClock, freeSquadRebuildGameweek, pricingAmnestyActive, gameweekOpenedAt]);
 
-  /** Free transfers you had when this gameweek opened (from saved team). */
+  /** Free transfers you had when this gameweek opened (from saved team + shop). */
   const freeTransfersAtLock = useMemo(() => {
     if (!mySavedTeam) return null;
-    return resolveFreeTransfersAtGwStart(mySavedTeam.freeTransfersAtGwStart);
-  }, [mySavedTeam]);
+    const shop = parseShopForScoring(mySavedTeam.fantasyShop, currentGameweek);
+    return effectiveFreeTransfersForShop(
+      resolveFreeTransfersAtGwStart(mySavedTeam.freeTransfersAtGwStart),
+      shop,
+    );
+  }, [mySavedTeam, currentGameweek]);
 
   const leaderboard = useMemo(() => {
     const rows = teams.map((t) => {
@@ -3783,8 +3828,10 @@ export default function Page() {
             unlocked || rollBaselineForNewJoinerGrace ? [...newPlayers] : baselineFromStored;
         }
 
+        const shop = parseShopForScoring(existing?.fantasyShop, currentGameweek);
+        const effectiveFree = effectiveFreeTransfersForShop(freeAtGwStart, shop);
         const T = countOutgoingPlayerChanges(baseline, newPlayers);
-        const extras = penaltiesApply ? transferExtrasAgainstFree(T, freeAtGwStart) : 0;
+        const extras = penaltiesApply ? transferExtrasAgainstFree(T, effectiveFree) : 0;
         const penaltyDue = penaltiesApply ? penaltyPointsForExtras(extras) : 0;
         const oldApplied = existing?.transferPenaltyPointsApplied ?? 0;
         const newCumulative = Math.round((prevCumulative - (penaltyDue - oldApplied)) * 10) / 10;
@@ -7190,39 +7237,62 @@ export default function Page() {
 
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
               <div className="grid gap-2">
-                {(teamModal.team.players ?? []).map((pid) => {
-                  const frozen = teamModal.playerScores?.find((s) => s.id === pid);
+                {(() => {
                   const pool = teamModal.live ? scoringPlayersById : playersById;
+                  const shop = parseShopForScoring(teamModal.team.fantasyShop, teamModal.gameweek);
+                  const shopScoreById = new Map(
+                    (
+                      teamModal.playerScores?.length
+                        ? null
+                        : scoreSquadWithShop({
+                            team: teamModal.team,
+                            shop,
+                            squadPlayerIds: teamModal.team.players,
+                            teamUid: teamModal.team.uid,
+                            players: teamModal.team.players.map((id) => {
+                              if (teamModal.live) {
+                                const scored = playerScoresInGameweek(teamModal.team, id, teamModal.gameweek);
+                                const pl = pool.get(id);
+                                return { id, line: scored && pl ? pl : null, scored };
+                              }
+                              const pl = pool.get(id);
+                              const h = (pl?.history ?? []).find((x) => x.week === teamModal.gameweek);
+                              const scored = Boolean(h) && !h?.didNotPlay;
+                              return { id, line: scored && h ? h : null, scored };
+                            }),
+                          })
+                    )?.map((row) => [row.id, row]) ?? [],
+                  );
+                  return (teamModal.team.players ?? []).map((pid) => {
+                  const frozen = teamModal.playerScores?.find((s) => s.id === pid);
                   const p = pool.get(pid);
                   const hist = !teamModal.live
                     ? (p?.history ?? []).find((h) => h.week === teamModal.gameweek)
                     : null;
+                  const shopRow = shopScoreById.get(pid);
                   const scoresThisGw = frozen
                     ? frozen.scored
                     : playerScoresInGameweek(teamModal.team, pid, teamModal.gameweek);
                   let basePts = 0;
                   let appliedPts = 0;
-                  let name = frozen?.name ?? p?.name ?? `Player ${pid}`;
+                  const name = frozen?.name ?? p?.name ?? `Player ${pid}`;
                   if (frozen) {
                     basePts = frozen.basePoints;
                     appliedPts = frozen.appliedPoints;
-                  } else if (teamModal.live && p) {
-                    basePts = scoresThisGw ? calculatePoints(p) : 0;
-                    const mult =
-                      teamModal.team.captain === pid ? 2 : teamModal.team.viceCaptain === pid ? 1.5 : 1;
-                    appliedPts = Math.round(basePts * mult * 10) / 10;
-                  } else if (hist) {
-                    basePts = scoresThisGw
-                      ? Number.isFinite(Number(hist.points))
-                        ? Number(hist.points)
-                        : calculatePoints(hist)
-                      : 0;
-                    const mult =
-                      teamModal.team.captain === pid ? 2 : teamModal.team.viceCaptain === pid ? 1.5 : 1;
-                    appliedPts = Math.round(basePts * mult * 10) / 10;
+                  } else if (shopRow) {
+                    basePts = shopRow.basePoints;
+                    appliedPts = shopRow.appliedPoints;
                   }
                   const isC = frozen?.isCaptain ?? teamModal.team.captain === pid;
                   const isVC = frozen?.isViceCaptain ?? teamModal.team.viceCaptain === pid;
+                  const isLuckyDip =
+                    frozen?.isLuckyDip ??
+                    shopRow?.isLuckyDip ??
+                    isLuckyDipPlayer(pid, shop, teamModal.team.players, teamModal.team.uid);
+                  const isPowerplay = frozen?.isPowerplay ?? shopRow?.isPowerplay ?? false;
+                  const capMult =
+                    shopRow?.captainMultiplier ??
+                    (isC ? (shop.activeItemIds.includes("triple-captain") ? 3 : 2) : isVC ? 1.5 : 1);
                   const isWK = teamModal.team.keeper === pid;
                   const fieldingLabel =
                     scoresThisGw && (hist || (teamModal.live && p))
@@ -7246,8 +7316,10 @@ export default function Page() {
                               <Pill tone={p.teamTier === 1 ? "blue" : "neutral"}>{TEAM_TIER_SHORT[p.teamTier]}</Pill>
                             </>
                           ) : null}
-                          {isC ? <Pill tone="red">C ×2</Pill> : null}
+                          {isC ? <Pill tone="red">C ×{capMult}</Pill> : null}
                           {isVC ? <Pill tone="amber">VC ×1.5</Pill> : null}
+                          {isLuckyDip ? <Pill tone="amber">Lucky Dip ×1.5</Pill> : null}
+                          {isPowerplay ? <Pill tone="green">Powerplay ×2</Pill> : null}
                           {isWK ? <Pill tone="blue">WK</Pill> : null}
                           {fieldingLabel ? <Pill tone="green">{fieldingLabel}</Pill> : null}
                           {!scoresThisGw ? <Pill tone="neutral">Did not score this GW</Pill> : null}
@@ -7256,19 +7328,20 @@ export default function Page() {
                       </div>
                       <div className="text-right">
                         <div className="text-xs font-medium text-zinc-400">
-                          {isC || isVC ? "Applied" : "Points"}
+                          {isC || isVC || isLuckyDip || isPowerplay ? "Applied" : "Points"}
                         </div>
                         <div className="text-base font-black text-white">{appliedPts}</div>
-                        {isC || isVC ? (
+                        {isC || isVC || isLuckyDip || isPowerplay ? (
                           <div className="text-[10px] text-zinc-500">base {basePts}</div>
                         ) : null}
                       </div>
                     </div>
                   );
-                })}
+                  });
+                })()}
               </div>
               <div className="mt-4 text-xs text-zinc-500">
-                Points shown with captain (2×) / vice-captain (1.5×) applied. Archived weeks use the locked End GW snapshot when available.
+                Points include captain / vice, Powerplay, and any active Fantasy Shop boosters. Archived weeks use the locked End GW snapshot when available.
               </div>
             </div>
 

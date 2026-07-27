@@ -50,14 +50,14 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
     name: "Wildcard Lite",
     cost: 100,
     description:
-      "Make unlimited squad changes for this gameweek only. After the gameweek ends, your squad automatically reverts to its previous state.",
+      "Make unlimited squad changes for this gameweek only (no transfer point hits).",
     category: "wildcard",
   },
   {
     id: "full-wildcard",
     name: "Full Wildcard",
     cost: 250,
-    description: "Permanently rebuild your squad with unlimited transfers.",
+    description: "Permanently rebuild your squad with unlimited transfers for the rest of the season.",
     category: "wildcard",
     permanent: true,
   },
@@ -73,7 +73,8 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
     id: "captains-confidence",
     name: "Captain's Confidence",
     cost: 50,
-    description: "Captain earns double points for one gameweek.",
+    description:
+      "Locks in your captain's double points for this gameweek (same 2× as the standard captain bonus). Cannot be combined with Triple Captain.",
     category: "captain",
     conflictsWith: ["triple-captain"],
   },
@@ -106,17 +107,19 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
     name: "Rain Dance",
     cost: 100,
     description:
-      "If your selected fixture is abandoned or cancelled, affected players receive their average points instead of zero.",
+      "If your selected fixture is abandoned or cancelled, affected players receive their average points instead of zero. (Coming soon — purchase is stored but not applied yet.)",
     category: "utility",
   },
 ] as const;
 
-/** Rules to implement with game logic later — shown in the shop UI for now. */
+/** Shop rules shown in the UI. */
 export const SHOP_PLANNED_RULES: readonly string[] = [
   "Only one paid booster can be active each gameweek (Powerplay is separate and free for everyone).",
-  "Triple Captain and Captain's Confidence cannot be used in the same gameweek.",
+  "Triple Captain (3×) and Captain's Confidence (2×) cannot be used in the same gameweek.",
+  "Batter Boost / Bowler Boost double batting or bowling points across your whole squad.",
+  "Lucky Dip stacks with captain / Powerplay on the chosen player.",
+  "Wildcard Lite and Free Transfer waive transfer hits this gameweek; Full Wildcard lasts the season.",
   "A confirmation step is required before spending Fantasy Points.",
-  "Purchase history will be stored so managers can review boosters used throughout the season.",
 ];
 
 export type ShopPurchaseRecord = {
@@ -170,6 +173,8 @@ export type TeamFantasyShopState = {
   activeItemIds: ShopItemId[];
   activeGameweek: number;
   purchaseHistory: ShopPurchaseRecord[];
+  /** Squad player chosen for Lucky Dip this gameweek (set at purchase). */
+  luckyDipPlayerId?: number | null;
 };
 
 const SHOP_ITEM_ID_SET = new Set<string>(SHOP_ITEMS.map((item) => item.id));
@@ -206,6 +211,7 @@ export function emptyTeamFantasyShop(gameweek: number): TeamFantasyShopState {
     activeItemIds: ["powerplay"],
     activeGameweek: gameweek,
     purchaseHistory: [],
+    luckyDipPlayerId: null,
   };
 }
 
@@ -215,14 +221,24 @@ export function parseTeamFantasyShop(raw: unknown, currentGameweek: number): Tea
   const storedGw = Number(o.activeGameweek);
   const ownedItemIds = filterShopItemIds(o.ownedItemIds, ["powerplay"]);
   let activeItemIds = filterShopItemIds(o.activeItemIds, ["powerplay"]);
+  let luckyDipPlayerId: number | null = null;
   if (!Number.isFinite(storedGw) || storedGw !== currentGameweek) {
+    // New gameweek: clear one-week boosters; keep permanent owned items + Powerplay.
     activeItemIds = ["powerplay"];
+    for (const id of ownedItemIds) {
+      const item = shopItemById(id);
+      if (item?.permanent && !activeItemIds.includes(id)) activeItemIds.push(id);
+    }
+  } else if (o.luckyDipPlayerId != null && Number.isFinite(Number(o.luckyDipPlayerId))) {
+    luckyDipPlayerId = Number(o.luckyDipPlayerId);
   }
+  if (!activeItemIds.includes("powerplay")) activeItemIds = ["powerplay", ...activeItemIds];
   return {
     ownedItemIds: ownedItemIds.includes("powerplay") ? ownedItemIds : (["powerplay", ...ownedItemIds] as ShopItemId[]),
     activeItemIds,
     activeGameweek: currentGameweek,
     purchaseHistory: parsePurchaseHistory(o.purchaseHistory),
+    luckyDipPlayerId,
   };
 }
 
@@ -235,11 +251,19 @@ export function shopWalletFromTeam(cumulativePoints: number, shop: TeamFantasySh
   };
 }
 
+function pickLuckyDipPlayer(playerIds: number[]): number | null {
+  const eligible = playerIds.filter((id) => Number.isFinite(id));
+  if (!eligible.length) return null;
+  const idx = Math.floor(Math.random() * eligible.length);
+  return eligible[idx] ?? null;
+}
+
 export function buildTeamFantasyShopAfterPurchase(args: {
   shop: TeamFantasyShopState;
   item: ShopItem;
   gameweek: number;
   alreadyOwned: boolean;
+  squadPlayerIds?: number[];
 }): TeamFantasyShopState {
   const { shop, item, gameweek, alreadyOwned } = args;
   const cost = alreadyOwned ? 0 : item.cost;
@@ -263,10 +287,23 @@ export function buildTeamFantasyShopAfterPurchase(args: {
   }
   if (!activeItemIds.includes(item.id)) activeItemIds.push(item.id);
 
+  let luckyDipPlayerId = shop.luckyDipPlayerId ?? null;
+  if (item.id === "lucky-dip") {
+    const squad = args.squadPlayerIds ?? [];
+    if (squad.length) {
+      const keepExisting =
+        alreadyOwned &&
+        luckyDipPlayerId != null &&
+        squad.includes(luckyDipPlayerId);
+      if (!keepExisting) luckyDipPlayerId = pickLuckyDipPlayer(squad);
+    }
+  }
+
   return {
     ownedItemIds,
     activeItemIds,
     activeGameweek: gameweek,
     purchaseHistory: [record, ...shop.purchaseHistory].slice(0, 100),
+    luckyDipPlayerId,
   };
 }

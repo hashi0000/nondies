@@ -29,6 +29,7 @@ import {
   type ShopItem,
   type TeamFantasyShopState,
 } from "@/lib/fantasyShop";
+import { resolveLuckyDipPlayerId } from "@/lib/shopScoring";
 import { appendPointsAudit, parsePointsAudit } from "@/lib/teamPointsBackup";
 import {
   parsePlayerStatLine,
@@ -280,15 +281,17 @@ export default function FantasyShopPage() {
   }, [authUser, currentGameweek]);
 
   const pointsTeam = useMemo((): PointsTeam | null => {
-    if (!savedSquad) return null;
+    if (!savedSquad || !authUser) return null;
     return {
+      uid: authUser.uid,
       players: savedSquad.players,
       captain: savedSquad.captain,
       viceCaptain: savedSquad.viceCaptain,
       cumulativePoints: leagueBalance,
       playerJoinedGameweek: savedSquad.playerJoinedGameweek,
+      fantasyShop: teamShop ?? undefined,
     };
-  }, [savedSquad, leagueBalance]);
+  }, [savedSquad, leagueBalance, authUser, teamShop]);
 
   const spendableBalance = useMemo(() => {
     if (!pointsTeam || pointsTeam.players.length === 0) return leagueBalance;
@@ -310,6 +313,10 @@ export default function FantasyShopPage() {
 
   const squadRows = useMemo(() => {
     if (!savedSquad?.players.length) return [];
+    const luckyId =
+      teamShop && authUser
+        ? resolveLuckyDipPlayerId(teamShop, savedSquad.players, authUser.uid)
+        : null;
     return savedSquad.players
       .map((id) => {
         const player = playersById.get(id);
@@ -319,10 +326,11 @@ export default function FantasyShopPage() {
           isCaptain: savedSquad.captain === id,
           isVice: savedSquad.viceCaptain === id,
           isKeeper: savedSquad.keeper === id,
+          isLuckyDip: luckyId === id,
         };
       })
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [savedSquad, playersById]);
+  }, [savedSquad, playersById, teamShop, authUser]);
 
   function requestPurchase(item: ShopItem) {
     setNotice(null);
@@ -360,6 +368,7 @@ export default function FantasyShopPage() {
       item,
       gameweek: currentGameweek,
       alreadyOwned,
+      squadPlayerIds: savedSquad?.players ?? [],
     });
     const nextBalance = Math.max(0, leagueBalance - cost);
 
@@ -471,7 +480,7 @@ export default function FantasyShopPage() {
         <section className="mt-5 rounded-2xl border border-white/10 bg-zinc-900/50 p-5 ring-1 ring-white/10">
           <div className="text-sm font-semibold text-white">Your saved squad</div>
           <p className="mt-1 text-xs text-zinc-500">
-            Boosters like Lucky Dip and captain chips apply to these players when game logic is connected.
+            Active boosters apply to these players. Lucky Dip highlights the randomly chosen 1.5× player for this gameweek.
           </p>
           {squadRows.length > 0 ? (
             <div className="mt-4 flex flex-wrap gap-2">
@@ -495,6 +504,11 @@ export default function FantasyShopPage() {
                     {row.isKeeper ? (
                       <span className="rounded bg-sky-600/30 px-1.5 py-0.5 text-[10px] font-bold text-sky-100 ring-1 ring-sky-500/40">
                         WK
+                      </span>
+                    ) : null}
+                    {row.isLuckyDip ? (
+                      <span className="rounded bg-violet-600/30 px-1.5 py-0.5 text-[10px] font-bold text-violet-100 ring-1 ring-violet-500/40">
+                        Lucky Dip
                       </span>
                     ) : null}
                   </span>

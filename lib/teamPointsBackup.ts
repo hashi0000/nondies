@@ -61,7 +61,7 @@ export function buildTeamPointsBackupRow(args: {
   return {
     uid: args.uid,
     name: args.name,
-    ownerName: args.ownerName,
+    ...(args.ownerName ? { ownerName: args.ownerName } : {}),
     weekPoints,
     cumulativePoints,
     total: Math.round((cumulativePoints + weekPoints) * 10) / 10,
@@ -77,22 +77,38 @@ export function seasonPointsByGwFromEnd(
   gameweek: number,
   snap: Pick<GwTeamSnapshot, "weekPoints" | "cumulativePointsBefore" | "cumulativePointsAfter">,
 ): Record<string, SeasonGwPointsEntry> {
-  return {
-    ...(existing ?? {}),
-    [String(gameweek)]: {
-      weekPoints: Math.round(snap.weekPoints * 10) / 10,
-      cumulativeBefore: Math.round(snap.cumulativePointsBefore * 10) / 10,
-      cumulativeAfter: Math.round(snap.cumulativePointsAfter * 10) / 10,
-      endedAt: new Date().toISOString(),
-    },
+  const cleaned: Record<string, SeasonGwPointsEntry> = {};
+  for (const [k, v] of Object.entries(existing ?? {})) {
+    if (!v || typeof v !== "object") continue;
+    cleaned[k] = {
+      weekPoints: Number(v.weekPoints ?? 0),
+      cumulativeBefore: Number(v.cumulativeBefore ?? 0),
+      cumulativeAfter: Number(v.cumulativeAfter ?? 0),
+      ...(typeof v.endedAt === "string" ? { endedAt: v.endedAt } : {}),
+    };
+  }
+  cleaned[String(gameweek)] = {
+    weekPoints: Math.round(snap.weekPoints * 10) / 10,
+    cumulativeBefore: Math.round(snap.cumulativePointsBefore * 10) / 10,
+    cumulativeAfter: Math.round(snap.cumulativePointsAfter * 10) / 10,
+    endedAt: new Date().toISOString(),
   };
+  return cleaned;
 }
 
 export function appendPointsAudit(
   existing: PointsAuditEntry[] | undefined,
   entry: PointsAuditEntry,
 ): PointsAuditEntry[] {
-  return [entry, ...(existing ?? [])].slice(0, MAX_POINTS_AUDIT);
+  const sanitize = (e: PointsAuditEntry): PointsAuditEntry => ({
+    at: e.at,
+    gameweek: e.gameweek,
+    cumulativePoints: e.cumulativePoints,
+    source: e.source,
+    ...(e.weekPoints != null && Number.isFinite(e.weekPoints) ? { weekPoints: e.weekPoints } : {}),
+    ...(e.total != null && Number.isFinite(e.total) ? { total: e.total } : {}),
+  });
+  return [sanitize(entry), ...(existing ?? []).map(sanitize)].slice(0, MAX_POINTS_AUDIT);
 }
 
 export function parseSeasonPointsByGw(raw: unknown): Record<string, SeasonGwPointsEntry> {
@@ -105,7 +121,7 @@ export function parseSeasonPointsByGw(raw: unknown): Record<string, SeasonGwPoin
       weekPoints: Number(row.weekPoints ?? 0),
       cumulativeBefore: Number(row.cumulativeBefore ?? 0),
       cumulativeAfter: Number(row.cumulativeAfter ?? 0),
-      endedAt: typeof row.endedAt === "string" ? row.endedAt : undefined,
+      ...(typeof row.endedAt === "string" ? { endedAt: row.endedAt } : {}),
     };
   }
   return out;
@@ -117,14 +133,19 @@ export function parsePointsAudit(raw: unknown): PointsAuditEntry[] {
   for (const row of raw) {
     if (!row || typeof row !== "object") continue;
     const o = row as Record<string, unknown>;
-    out.push({
+    const entry: PointsAuditEntry = {
       at: String(o.at ?? ""),
       gameweek: Number(o.gameweek ?? 0),
       cumulativePoints: Number(o.cumulativePoints ?? 0),
-      weekPoints: o.weekPoints != null ? Number(o.weekPoints) : undefined,
-      total: o.total != null ? Number(o.total) : undefined,
       source: String(o.source ?? "unknown"),
-    });
+    };
+    if (o.weekPoints != null && Number.isFinite(Number(o.weekPoints))) {
+      entry.weekPoints = Number(o.weekPoints);
+    }
+    if (o.total != null && Number.isFinite(Number(o.total))) {
+      entry.total = Number(o.total);
+    }
+    out.push(entry);
   }
   return out;
 }

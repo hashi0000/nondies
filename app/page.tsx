@@ -4507,7 +4507,7 @@ export default function Page() {
           const nextFree = freeTransfersAfterRollover(unused);
           const cumulativeBefore = team.cumulativePoints ?? 0;
           const cumulativeAfter = Math.round((cumulativeBefore + weekPts) * 10) / 10;
-          const playerPurchasePrices =
+          const playerPurchasePricesRaw =
             team.playerPurchasePrices && Object.keys(team.playerPurchasePrices).length > 0
               ? team.playerPurchasePrices
               : buildPurchasePricesAfterSave({
@@ -4517,35 +4517,51 @@ export default function Page() {
                     pricingAfterGw.get(id)?.effectivePrice ?? playersByIdForGw.get(id)?.price ?? 0,
                   listedPriceForId: (id) => playersByIdForGw.get(id)?.price,
                 });
+          const playerPurchasePrices: Record<string, number> = {};
+          for (const [k, v] of Object.entries(playerPurchasePricesRaw)) {
+            const n = Number(v);
+            if (Number.isFinite(n)) playerPurchasePrices[k] = Math.round(n);
+          }
+          const captain = team.captain != null && Number.isFinite(Number(team.captain)) ? Number(team.captain) : null;
+          const viceCaptain =
+            team.viceCaptain != null && Number.isFinite(Number(team.viceCaptain)) ? Number(team.viceCaptain) : null;
+          const keeper = team.keeper != null && Number.isFinite(Number(team.keeper)) ? Number(team.keeper) : null;
+          const playerJoinedGameweek: Record<string, number> = {};
+          if (team.playerJoinedGameweek && typeof team.playerJoinedGameweek === "object") {
+            for (const [k, v] of Object.entries(team.playerJoinedGameweek)) {
+              const n = Number(v);
+              if (Number.isFinite(n)) playerJoinedGameweek[k] = Math.floor(n);
+            }
+          }
           teamSnapshots.push({
             uid: team.uid,
             name: team.name,
-            ownerName: team.ownerName,
+            ...(team.ownerName ? { ownerName: team.ownerName } : {}),
             players: [...team.players],
-            captain: team.captain,
-            viceCaptain: team.viceCaptain,
-            keeper: team.keeper,
+            captain,
+            viceCaptain,
+            keeper,
             weekPoints: weekPts,
             cumulativePointsBefore: cumulativeBefore,
             cumulativePointsAfter: cumulativeAfter,
             transferBaselinePlayers: [...baseline],
             freeTransfersAtGwStart: F,
             transferPenaltyPointsApplied: team.transferPenaltyPointsApplied ?? 0,
-            playerJoinedGameweek: team.playerJoinedGameweek ? { ...team.playerJoinedGameweek } : {},
+            playerJoinedGameweek,
             playerScores: buildGwPlayerWeekScores(team, playersByIdForGw, gw),
           });
           teamBatch.update(doc(db, "teams", team.uid), {
             name: team.name,
             ownerName: team.ownerName ?? null,
             players: [...team.players],
-            captain: team.captain,
-            viceCaptain: team.viceCaptain,
-            keeper: team.keeper,
+            captain,
+            viceCaptain,
+            keeper,
             cumulativePoints: cumulativeAfter,
             transferBaselinePlayers: [...team.players],
             freeTransfersAtGwStart: nextFree,
             transferPenaltyPointsApplied: 0,
-            playerJoinedGameweek: team.playerJoinedGameweek ?? {},
+            playerJoinedGameweek,
             playerPurchasePrices,
             seasonPointsByGw: seasonPointsByGwFromEnd(
               parseSeasonPointsByGw(team.seasonPointsByGw),

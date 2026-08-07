@@ -2566,6 +2566,7 @@ export default function Page() {
 
   // Admin
   const [adminAuthed, setAdminAuthed] = useState(false);
+  const [budgetTopUpTeamUid, setBudgetTopUpTeamUid] = useState("");
   const [pin, setPin] = useState("");
   const pinInputRef = useRef<HTMLInputElement | null>(null);
   /** After saving to Firestore, skip one sync from `players` → `localPlayers` so we don't overwrite with stale snapshot data before onSnapshot updates. */
@@ -3940,7 +3941,7 @@ export default function Page() {
 
   const incompleteSquadTeams = useMemo(() => {
     return teams
-      .filter((t) => t.players.length > 0 && t.players.length < SQUAD_SIZE)
+      .filter((t) => t.players.length < SQUAD_SIZE)
       .map((t) => {
         const spend = squadSpend(t.players, {}, (id) => playersById.get(id)?.price ?? 0);
         const topUp = parseBudgetTopUp(t.budgetTopUp);
@@ -3961,9 +3962,14 @@ export default function Page() {
         const overBy = Math.max(0, spend - draftCap);
         return { team: t, spend, topUp, draftCap, overBy };
       })
-      .filter((row) => row.overBy > 0)
+      .filter((row) => row.overBy > 0 || row.topUp > 0)
       .sort((a, b) => b.overBy - a.overBy || a.team.name.localeCompare(b.team.name));
   }, [teams, playersById, squadBudget, listedPriceForId, marketPriceForId]);
+
+  const budgetTopUpTarget = useMemo(
+    () => teams.find((t) => t.uid === budgetTopUpTeamUid) ?? null,
+    [teams, budgetTopUpTeamUid],
+  );
 
   async function runAdminAccessProbe() {
     if (!authUser) return;
@@ -6215,88 +6221,114 @@ export default function Page() {
                       </div>
 
                       <div className="rounded-2xl border border-sky-500/35 bg-sky-500/10 px-4 py-3.5 text-sm text-sky-100 ring-1 ring-sky-500/25">
-                        <div className="font-semibold text-sky-50">Incomplete / over-budget squads · £ top-up</div>
+                        <div className="font-semibold text-sky-50">Budget top-up</div>
                         <p className="mt-1.5 leading-relaxed text-sky-100/90">
-                          Incomplete squads ({"<"}{SQUAD_SIZE}) automatically use the league draft cap (£{squadBudget}). Grant a £ top-up if they still cannot finish, or if a full squad is stuck over budget.
+                          Pick any team and grant extra £ on top of their draft cap. Incomplete squads ({"<"}{SQUAD_SIZE}) already use the league cap (£{squadBudget}); use this if they still cannot finish.
                         </p>
-                        {incompleteSquadTeams.length === 0 && overBudgetSquadTeams.length === 0 ? (
-                          <p className="mt-3 text-xs text-sky-200/80">No stuck squads right now.</p>
-                        ) : (
-                          <div className="mt-3 grid gap-2">
-                            {incompleteSquadTeams.map(({ team, slots, spend, topUp, draftCap }) => (
-                              <div
-                                key={team.uid}
-                                className="flex flex-col gap-2 rounded-xl bg-black/25 px-3 py-2.5 ring-1 ring-sky-500/25 sm:flex-row sm:items-center sm:justify-between"
-                              >
-                                <div className="min-w-0">
-                                  <div className="truncate font-semibold text-white">{team.name}</div>
-                                  <div className="text-xs text-sky-100/75">
-                                    Incomplete {slots}/{SQUAD_SIZE} · spend {money(spend)} · cap {money(draftCap)}
-                                    {topUp > 0 ? ` (incl. +£${topUp})` : ""}
-                                  </div>
-                                </div>
-                                <div className="flex flex-wrap gap-1.5">
-                                  {[10, 20, 30, 40].map((amt) => (
-                                    <button
-                                      key={amt}
-                                      type="button"
-                                      onClick={() => void setTeamBudgetTopUp(team, amt)}
-                                      className="rounded-lg bg-sky-600/80 px-2.5 py-1 text-[11px] font-bold text-white ring-1 ring-sky-400/40 hover:bg-sky-500"
-                                    >
-                                      +£{amt}
-                                    </button>
-                                  ))}
-                                  {topUp > 0 ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => void setTeamBudgetTopUp(team, 0)}
-                                      className="rounded-lg bg-white/10 px-2.5 py-1 text-[11px] font-semibold text-zinc-200 ring-1 ring-white/15 hover:bg-white/15"
-                                    >
-                                      Clear
-                                    </button>
-                                  ) : null}
-                                </div>
-                              </div>
-                            ))}
-                            {overBudgetSquadTeams.map(({ team, spend, topUp, draftCap, overBy }) => (
-                              <div
-                                key={team.uid}
-                                className="flex flex-col gap-2 rounded-xl bg-black/25 px-3 py-2.5 ring-1 ring-amber-500/30 sm:flex-row sm:items-center sm:justify-between"
-                              >
-                                <div className="min-w-0">
-                                  <div className="truncate font-semibold text-white">{team.name}</div>
-                                  <div className="text-xs text-amber-100/80">
-                                    Over budget by {money(overBy)} · spend {money(spend)} · cap {money(draftCap)}
-                                    {topUp > 0 ? ` (incl. +£${topUp})` : ""}
-                                  </div>
-                                </div>
-                                <div className="flex flex-wrap gap-1.5">
-                                  {[overBy, overBy + 5, 20, 30]
-                                    .filter((amt, i, arr) => amt > 0 && arr.indexOf(amt) === i)
-                                    .slice(0, 4)
-                                    .map((amt) => (
-                                      <button
-                                        key={amt}
-                                        type="button"
-                                        onClick={() => void setTeamBudgetTopUp(team, Math.max(topUp, amt))}
-                                        className="rounded-lg bg-amber-600/80 px-2.5 py-1 text-[11px] font-bold text-white ring-1 ring-amber-400/40 hover:bg-amber-500"
-                                      >
-                                        +£{amt}
-                                      </button>
-                                    ))}
-                                  {topUp > 0 ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => void setTeamBudgetTopUp(team, 0)}
-                                      className="rounded-lg bg-white/10 px-2.5 py-1 text-[11px] font-semibold text-zinc-200 ring-1 ring-white/15 hover:bg-white/15"
-                                    >
-                                      Clear
-                                    </button>
-                                  ) : null}
-                                </div>
-                              </div>
-                            ))}
+
+                        <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                          <label className="block min-w-0">
+                            <div className="mb-1.5 text-xs font-medium text-sky-100/80">Team</div>
+                            <select
+                              value={budgetTopUpTeamUid}
+                              onChange={(e) => setBudgetTopUpTeamUid(e.target.value)}
+                              className="w-full rounded-xl bg-black/30 px-3 py-2.5 text-sm text-white ring-1 ring-sky-500/30 outline-none focus:ring-2 focus:ring-sky-400/60"
+                            >
+                              <option value="">Select a team…</option>
+                              {[...teams]
+                                .sort((a, b) => a.name.localeCompare(b.name))
+                                .map((t) => (
+                                  <option key={t.uid} value={t.uid}>
+                                    {t.name} ({t.players.length}/{SQUAD_SIZE}
+                                    {parseBudgetTopUp(t.budgetTopUp) > 0
+                                      ? ` · +£${parseBudgetTopUp(t.budgetTopUp)}`
+                                      : ""}
+                                    )
+                                  </option>
+                                ))}
+                            </select>
+                          </label>
+                          {budgetTopUpTarget ? (
+                            <div className="text-xs text-sky-100/75 sm:pb-2">
+                              Cap now{" "}
+                              {money(
+                                draftBudgetForTeam(
+                                  squadBudget,
+                                  budgetTopUpTarget,
+                                  listedPriceForId,
+                                  marketPriceForId,
+                                ),
+                              )}
+                              {parseBudgetTopUp(budgetTopUpTarget.budgetTopUp) > 0
+                                ? ` (incl. +£${parseBudgetTopUp(budgetTopUpTarget.budgetTopUp)})`
+                                : ""}
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap gap-1.5">
+                          {[10, 20, 30, 40, 50].map((amt) => (
+                            <button
+                              key={amt}
+                              type="button"
+                              disabled={!budgetTopUpTarget}
+                              onClick={() => budgetTopUpTarget && void setTeamBudgetTopUp(budgetTopUpTarget, amt)}
+                              className="rounded-lg bg-sky-600/80 px-3 py-1.5 text-xs font-bold text-white ring-1 ring-sky-400/40 hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              +£{amt}
+                            </button>
+                          ))}
+                          <button
+                            type="button"
+                            disabled={!budgetTopUpTarget || parseBudgetTopUp(budgetTopUpTarget.budgetTopUp) <= 0}
+                            onClick={() => budgetTopUpTarget && void setTeamBudgetTopUp(budgetTopUpTarget, 0)}
+                            className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-zinc-200 ring-1 ring-white/15 hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            Clear top-up
+                          </button>
+                        </div>
+
+                        {incompleteSquadTeams.length > 0 || overBudgetSquadTeams.length > 0 ? (
+                          <div className="mt-4 border-t border-sky-500/25 pt-3">
+                            <div className="text-xs font-semibold uppercase tracking-wide text-sky-200/80">
+                              Suggested
+                            </div>
+                            <div className="mt-2 grid gap-2">
+                              {incompleteSquadTeams.map(({ team, slots, spend, topUp, draftCap }) => (
+                                <button
+                                  key={team.uid}
+                                  type="button"
+                                  onClick={() => setBudgetTopUpTeamUid(team.uid)}
+                                  className="flex flex-col gap-0.5 rounded-xl bg-black/25 px-3 py-2.5 text-left ring-1 ring-sky-500/25 hover:bg-black/40 sm:flex-row sm:items-center sm:justify-between"
+                                >
+                                  <span className="truncate font-semibold text-white">{team.name}</span>
+                                  <span className="text-xs text-sky-100/75">
+                                    {slots}/{SQUAD_SIZE} · spend {money(spend)} · cap {money(draftCap)}
+                                    {topUp > 0 ? ` · +£${topUp}` : ""}
+                                  </span>
+                                </button>
+                              ))}
+                              {overBudgetSquadTeams.map(({ team, spend, topUp, draftCap, overBy }) => (
+                                <button
+                                  key={team.uid}
+                                  type="button"
+                                  onClick={() => setBudgetTopUpTeamUid(team.uid)}
+                                  className="flex flex-col gap-0.5 rounded-xl bg-black/25 px-3 py-2.5 text-left ring-1 ring-amber-500/30 hover:bg-black/40 sm:flex-row sm:items-center sm:justify-between"
+                                >
+                                  <span className="truncate font-semibold text-white">{team.name}</span>
+                                  <span className="text-xs text-amber-100/80">
+                                    {overBy > 0 ? `Over by ${money(overBy)} · ` : ""}
+                                    spend {money(spend)} · cap {money(draftCap)}
+                                    {topUp > 0 ? ` · +£${topUp}` : ""}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
                           </div>
+                        ) : (
+                          <p className="mt-3 text-xs text-sky-200/80">
+                            No auto-suggested stuck squads — use the dropdown above to top up any team.
+                          </p>
                         )}
                       </div>
 

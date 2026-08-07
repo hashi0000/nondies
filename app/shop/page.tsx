@@ -345,7 +345,9 @@ export default function FantasyShopPage() {
 
     const conflict = hasConflictingActiveBooster(item, wallet.activeItemIds);
     if (conflict && isPaidBooster(item) && !wallet.activeItemIds.includes(item.id)) {
-      setNotice(`Only one paid booster can be active per gameweek (${conflict.name} is already active).`);
+      setNotice(
+        `${conflict.name} is already active in that slot. Scoring boosters share one slot; transfer perks share another — you can use one of each.`,
+      );
       return;
     }
 

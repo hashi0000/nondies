@@ -122,6 +122,7 @@ import {
   GRANDFATHERED_SQUAD_MESSAGE,
   PERSONAL_SPEND_CAP_NOTICE_KEY,
   draftBudgetForTeam,
+  parseBudgetTopUp,
   personalSpendCapForTeam,
   resolveTeamPurchasePrices,
   purchasePricesForRestoredSnapshot,
@@ -410,6 +411,8 @@ type SavedTeam = {
   playerPurchasePrices?: PurchasePriceMap;
   /** Gameweek when this team was first saved (mid-season joiners get unlimited edits until that GW’s lineup lock). */
   firstSaveGameweek?: number;
+  /** Admin £ credit added on top of personal / league draft budget. */
+  budgetTopUp?: number;
   /** Fantasy Shop — owned/active perks and purchase history. */
   fantasyShop?: unknown;
   /** Permanent ledger of week + cumulative after each End GW. */
@@ -3359,6 +3362,7 @@ export default function Page() {
     () => draftBudgetForTeam(squadBudget, mySavedTeam, listedPriceForId, marketPriceForId),
     [squadBudget, mySavedTeam, listedPriceForId, marketPriceForId],
   );
+  const myBudgetTopUp = parseBudgetTopUp(mySavedTeam?.budgetTopUp);
   const usesPersonalSpendCap = personalSpendCap != null;
   const showPersonalSpendCapAnnouncement =
     authUser &&
@@ -3916,6 +3920,50 @@ export default function Page() {
       setPricingAmnestyBusy(false);
     }
   }
+
+  async function setTeamBudgetTopUp(team: SavedTeam, amount: number) {
+    if (!authUser) return;
+    const next = parseBudgetTopUp(amount);
+    const label = next > 0 ? `£${next}` : "£0 (clear)";
+    if (
+      !window.confirm(
+        `Set budget top-up for ${team.name} to ${label}? Their draft cap becomes league/personal budget + this amount.`,
+      )
+    ) {
+      return;
+    }
+    await runAction("Budget top-up", async () => {
+      await assertLeagueAdminFirestoreAccess(authUser);
+      await updateDoc(doc(db, "teams", team.uid), { budgetTopUp: next });
+    });
+  }
+
+  const incompleteSquadTeams = useMemo(() => {
+    return teams
+      .filter((t) => t.players.length > 0 && t.players.length < SQUAD_SIZE)
+      .map((t) => {
+        const spend = squadSpend(t.players, {}, (id) => playersById.get(id)?.price ?? 0);
+        const topUp = parseBudgetTopUp(t.budgetTopUp);
+        const draftCap = draftBudgetForTeam(squadBudget, t, listedPriceForId, marketPriceForId);
+        return { team: t, spend, topUp, draftCap, slots: t.players.length };
+      })
+      .sort((a, b) => a.slots - b.slots || a.team.name.localeCompare(b.team.name));
+  }, [teams, playersById, squadBudget, listedPriceForId, marketPriceForId]);
+
+  /** Full squads still over their draft cap (need admin £ help). */
+  const overBudgetSquadTeams = useMemo(() => {
+    return teams
+      .filter((t) => t.players.length === SQUAD_SIZE)
+      .map((t) => {
+        const spend = squadSpend(t.players, {}, (id) => playersById.get(id)?.price ?? 0);
+        const topUp = parseBudgetTopUp(t.budgetTopUp);
+        const draftCap = draftBudgetForTeam(squadBudget, t, listedPriceForId, marketPriceForId);
+        const overBy = Math.max(0, spend - draftCap);
+        return { team: t, spend, topUp, draftCap, overBy };
+      })
+      .filter((row) => row.overBy > 0)
+      .sort((a, b) => b.overBy - a.overBy || a.team.name.localeCompare(b.team.name));
+  }, [teams, playersById, squadBudget, listedPriceForId, marketPriceForId]);
 
   async function runAdminAccessProbe() {
     if (!authUser) return;
@@ -5074,6 +5122,11 @@ export default function Page() {
                   <span className="text-zinc-400">/ {money(draftBudget)}</span>
                 </Pill>
               </span>
+              {myBudgetTopUp > 0 ? (
+                <span title="Admin budget top-up included in your draft cap">
+                  <Pill tone="blue">+£{myBudgetTopUp} budget help</Pill>
+                </span>
+              ) : null}
               <Pill tone={locked ? "amber" : "green"}>
                 {locked ? <Lock className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}
                 {locked ? `Locked (${formatLockTime(lockDate)})` : `Locks ${formatLockTime(lockDate)}`}
@@ -6159,6 +6212,92 @@ export default function Page() {
                               ? "Post Pavilion notice again"
                               : `Enable free rebuild GW${currentGameweek} + notify`}
                         </button>
+                      </div>
+
+                      <div className="rounded-2xl border border-sky-500/35 bg-sky-500/10 px-4 py-3.5 text-sm text-sky-100 ring-1 ring-sky-500/25">
+                        <div className="font-semibold text-sky-50">Incomplete / over-budget squads · £ top-up</div>
+                        <p className="mt-1.5 leading-relaxed text-sky-100/90">
+                          Incomplete squads ({"<"}{SQUAD_SIZE}) automatically use the league draft cap (£{squadBudget}). Grant a £ top-up if they still cannot finish, or if a full squad is stuck over budget.
+                        </p>
+                        {incompleteSquadTeams.length === 0 && overBudgetSquadTeams.length === 0 ? (
+                          <p className="mt-3 text-xs text-sky-200/80">No stuck squads right now.</p>
+                        ) : (
+                          <div className="mt-3 grid gap-2">
+                            {incompleteSquadTeams.map(({ team, slots, spend, topUp, draftCap }) => (
+                              <div
+                                key={team.uid}
+                                className="flex flex-col gap-2 rounded-xl bg-black/25 px-3 py-2.5 ring-1 ring-sky-500/25 sm:flex-row sm:items-center sm:justify-between"
+                              >
+                                <div className="min-w-0">
+                                  <div className="truncate font-semibold text-white">{team.name}</div>
+                                  <div className="text-xs text-sky-100/75">
+                                    Incomplete {slots}/{SQUAD_SIZE} · spend {money(spend)} · cap {money(draftCap)}
+                                    {topUp > 0 ? ` (incl. +£${topUp})` : ""}
+                                  </div>
+                                </div>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {[10, 20, 30, 40].map((amt) => (
+                                    <button
+                                      key={amt}
+                                      type="button"
+                                      onClick={() => void setTeamBudgetTopUp(team, amt)}
+                                      className="rounded-lg bg-sky-600/80 px-2.5 py-1 text-[11px] font-bold text-white ring-1 ring-sky-400/40 hover:bg-sky-500"
+                                    >
+                                      +£{amt}
+                                    </button>
+                                  ))}
+                                  {topUp > 0 ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => void setTeamBudgetTopUp(team, 0)}
+                                      className="rounded-lg bg-white/10 px-2.5 py-1 text-[11px] font-semibold text-zinc-200 ring-1 ring-white/15 hover:bg-white/15"
+                                    >
+                                      Clear
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </div>
+                            ))}
+                            {overBudgetSquadTeams.map(({ team, spend, topUp, draftCap, overBy }) => (
+                              <div
+                                key={team.uid}
+                                className="flex flex-col gap-2 rounded-xl bg-black/25 px-3 py-2.5 ring-1 ring-amber-500/30 sm:flex-row sm:items-center sm:justify-between"
+                              >
+                                <div className="min-w-0">
+                                  <div className="truncate font-semibold text-white">{team.name}</div>
+                                  <div className="text-xs text-amber-100/80">
+                                    Over budget by {money(overBy)} · spend {money(spend)} · cap {money(draftCap)}
+                                    {topUp > 0 ? ` (incl. +£${topUp})` : ""}
+                                  </div>
+                                </div>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {[overBy, overBy + 5, 20, 30]
+                                    .filter((amt, i, arr) => amt > 0 && arr.indexOf(amt) === i)
+                                    .slice(0, 4)
+                                    .map((amt) => (
+                                      <button
+                                        key={amt}
+                                        type="button"
+                                        onClick={() => void setTeamBudgetTopUp(team, Math.max(topUp, amt))}
+                                        className="rounded-lg bg-amber-600/80 px-2.5 py-1 text-[11px] font-bold text-white ring-1 ring-amber-400/40 hover:bg-amber-500"
+                                      >
+                                        +£{amt}
+                                      </button>
+                                    ))}
+                                  {topUp > 0 ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => void setTeamBudgetTopUp(team, 0)}
+                                      className="rounded-lg bg-white/10 px-2.5 py-1 text-[11px] font-semibold text-zinc-200 ring-1 ring-white/15 hover:bg-white/15"
+                                    >
+                                      Clear
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
 
                       <div className="rounded-2xl border border-amber-500/35 bg-amber-500/10 px-4 py-3.5 text-sm text-amber-100 ring-1 ring-amber-500/25">

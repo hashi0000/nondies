@@ -1,5 +1,5 @@
 import { POOL_PRICE_BAND } from "@/lib/dynamicPricing";
-import { PRE_DYNAMIC_PRICING_SNAPSHOT_GW } from "@/lib/leagueConfig";
+import { PRE_DYNAMIC_PRICING_SNAPSHOT_GW, SQUAD_SIZE } from "@/lib/leagueConfig";
 
 /** Opening listed prices at season start (matches seeded roster in the app). */
 export const INITIAL_LISTED_PRICES: Readonly<Record<number, number>> = {
@@ -47,6 +47,8 @@ export type TeamPurchaseContext = {
   playerPurchasePrices?: PurchasePriceMap;
   playerJoinedGameweek?: Record<string, number>;
   firstSaveGameweek?: number;
+  /** Admin £ top-up so a stuck manager can complete / fix their squad. */
+  budgetTopUp?: number;
 };
 
 /** Season managers through GW4 keep opening purchase prices; later joiners use full dynamic pricing. */
@@ -151,17 +153,26 @@ export function personalSpendCapForTeam(
   marketPriceForId: (id: number) => number,
 ): number | null {
   if (!team || !isGrandfatheredPricingTeam(team) || team.players.length === 0) return null;
+  // Incomplete squads must use the league dynamic cap so they can fill to 7.
+  if (team.players.length < SQUAD_SIZE) return null;
   return squadSpend(team.players, {}, marketPriceForId);
 }
 
-/** Draft/save budget: personal saved spend for original squads, else league dynamic cap. */
+export function parseBudgetTopUp(raw: unknown): number {
+  const n = Number(raw ?? 0);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(200, Math.round(n));
+}
+
+/** Draft/save budget: personal saved spend for original full squads, else league dynamic cap, plus any admin top-up. */
 export function draftBudgetForTeam(
   leagueBudget: number,
   team: TeamPurchaseContext | null | undefined,
   listedPriceForId: (id: number) => number | undefined,
   marketPriceForId: (id: number) => number,
 ): number {
-  return personalSpendCapForTeam(team, listedPriceForId, marketPriceForId) ?? leagueBudget;
+  const base = personalSpendCapForTeam(team, listedPriceForId, marketPriceForId) ?? leagueBudget;
+  return base + parseBudgetTopUp(team?.budgetTopUp);
 }
 
 /** Draft spend: always current market price (removals refund today's value). */

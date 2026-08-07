@@ -114,11 +114,11 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
 
 /** Shop rules shown in the UI. */
 export const SHOP_PLANNED_RULES: readonly string[] = [
-  "Only one paid booster can be active each gameweek (Powerplay is separate and free for everyone).",
-  "Triple Captain (3×) and Captain's Confidence (2×) cannot be used in the same gameweek.",
+  "One scoring booster per gameweek (Lucky Dip, Batter/Bowler Boost, Triple Captain, or Captain's Confidence). Powerplay is free and always on.",
+  "Transfer perks (Free Transfer / Wildcards) can be used alongside a scoring booster.",
+  "Triple Captain and Captain's Confidence cannot be used in the same gameweek.",
   "Batter Boost / Bowler Boost double batting or bowling points across your whole squad.",
   "Lucky Dip stacks with captain / Powerplay on the chosen player.",
-  "Wildcard Lite and Free Transfer waive transfer hits this gameweek; Full Wildcard lasts the season.",
   "A confirmation step is required before spending Fantasy Points.",
 ];
 
@@ -146,7 +146,28 @@ export function isPaidBooster(item: ShopItem): boolean {
   return !item.alwaysFree && item.cost > 0;
 }
 
-/** UI-only: one paid booster active per GW (Powerplay excluded). */
+/** Scoring chips share one slot; transfer chips share another; Rain Dance stacks with both. */
+export type ShopActiveSlot = "scoring" | "transfer" | "standalone";
+
+export function shopActiveSlot(item: ShopItem): ShopActiveSlot | null {
+  if (item.alwaysFree || item.id === "powerplay") return null;
+  switch (item.id) {
+    case "batter-boost":
+    case "bowler-boost":
+    case "lucky-dip":
+    case "triple-captain":
+    case "captains-confidence":
+      return "scoring";
+    case "free-transfer":
+    case "wildcard-lite":
+    case "full-wildcard":
+      return "transfer";
+    default:
+      return "standalone";
+  }
+}
+
+/** One scoring booster + one transfer perk can both be active (Powerplay is always free). */
 export function hasConflictingActiveBooster(
   item: ShopItem,
   activeItemIds: ShopItemId[],
@@ -158,7 +179,14 @@ export function hasConflictingActiveBooster(
     if (item.id === activeId) continue;
     if (item.conflictsWith?.includes(activeId)) return active;
     if (active.conflictsWith?.includes(item.id)) return active;
-    if (isPaidBooster(item)) return active;
+  }
+  const slot = shopActiveSlot(item);
+  if (!slot || slot === "standalone") return null;
+  for (const activeId of activeItemIds) {
+    if (activeId === "powerplay" || activeId === item.id) continue;
+    const active = shopItemById(activeId);
+    if (!active || !isPaidBooster(active)) continue;
+    if (shopActiveSlot(active) === slot) return active;
   }
   return null;
 }
@@ -279,10 +307,13 @@ export function buildTeamFantasyShopAfterPurchase(args: {
   const ownedItemIds = shop.ownedItemIds.includes(item.id) ? shop.ownedItemIds : [...shop.ownedItemIds, item.id];
 
   let activeItemIds = [...shop.activeItemIds];
-  if (isPaidBooster(item)) {
+  const slot = shopActiveSlot(item);
+  if (slot === "scoring" || slot === "transfer") {
     activeItemIds = activeItemIds.filter((id) => {
+      if (id === "powerplay") return true;
       const active = shopItemById(id);
-      return !active || !isPaidBooster(active) || id === "powerplay";
+      if (!active) return true;
+      return shopActiveSlot(active) !== slot;
     });
   }
   if (!activeItemIds.includes(item.id)) activeItemIds.push(item.id);

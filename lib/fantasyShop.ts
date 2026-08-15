@@ -43,7 +43,7 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
     name: "Bowler Boost",
     cost: 50,
     description:
-      "Double bowling points (wickets, maidens, hauls) for specialist bowlers and anyone who took a wicket or bowled a maiden this gameweek. Runs and fielding are unchanged.",
+      "After captain / vice / Powerplay, add bowling points ×2 for specialist bowlers and anyone who took a wicket or bowled a maiden this gameweek. Runs and fielding are unchanged.",
     category: "bowling",
   },
   {
@@ -117,7 +117,7 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
 export const SHOP_ACTIVE_EFFECT: Partial<Record<ShopItemId, string>> = {
   "batter-boost": "Batter Boost: batting points doubled for the whole squad.",
   "bowler-boost":
-    "Bowler Boost: bowling points doubled for specialist bowlers and anyone who took a wicket or bowled a maiden. Batting and fielding are unchanged.",
+    "Bowler Boost: bowling points ×2 added after captain / vice / Powerplay for specialist bowlers and anyone with a wicket or maiden.",
   "triple-captain": "Triple Captain: captain scores 3×.",
   "captains-confidence": "Captain's Confidence: captain 2× is locked for this gameweek.",
   "lucky-dip": "Lucky Dip: one squad player scores 1.5× (stacks with C/VC and Powerplay).",
@@ -129,7 +129,7 @@ export const SHOP_PLANNED_RULES: readonly string[] = [
   "One scoring booster per gameweek (Lucky Dip, Batter/Bowler Boost, Triple Captain, or Captain's Confidence). Powerplay is free and always on.",
   "Transfer perks (Free Transfer / Wildcards) can be used alongside a scoring booster.",
   "Triple Captain and Captain's Confidence cannot be used in the same gameweek.",
-  "Batter Boost doubles batting points across your whole squad. Bowler Boost doubles bowling points only (wickets, maidens, hauls) for specialist bowlers and anyone who took a wicket or bowled a maiden.",
+  "Batter Boost doubles batting points across your whole squad. Bowler Boost adds bowling points ×2 after C/VC/Powerplay for specialist bowlers and anyone who took a wicket or bowled a maiden.",
   "Lucky Dip stacks with captain / Powerplay on the chosen player.",
   "A confirmation step is required before spending Fantasy Points.",
 ];

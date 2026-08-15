@@ -20,6 +20,7 @@ export type GwPlayerWeekScore = {
   isPowerplay?: boolean;
   batterBoost?: boolean;
   bowlerBoost?: boolean;
+  bowlingPoints?: number;
 };
 
 export type GwTeamSnapshot = {
@@ -211,6 +212,7 @@ export function parseGwTeamsDoc(raw: Record<string, unknown>): GwTeamsDoc | null
                 isPowerplay: Boolean(s.isPowerplay),
                 batterBoost: Boolean(s.batterBoost),
                 bowlerBoost: Boolean(s.bowlerBoost),
+                bowlingPoints: Number.isFinite(Number(s.bowlingPoints)) ? Number(s.bowlingPoints) : undefined,
               };
             })
             .filter((x): x is NonNullable<typeof x> => x != null)

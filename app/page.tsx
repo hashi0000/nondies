@@ -1359,6 +1359,7 @@ function buildGwPlayerWeekScores(
       isPowerplay: row.isPowerplay,
       batterBoost: row.batterBoost,
       bowlerBoost: row.bowlerBoost,
+      bowlingPoints: row.bowlingPoints,
     };
   });
 }
@@ -1396,6 +1397,7 @@ function buildGwPlayerWeekScoresFromHistory(
       isPowerplay: row.isPowerplay,
       batterBoost: row.batterBoost,
       bowlerBoost: row.bowlerBoost,
+      bowlingPoints: row.bowlingPoints,
     };
   });
 }
@@ -7529,11 +7531,14 @@ export default function Page() {
                   const showApplied = isC || isVC || isLuckyDip || isPowerplay || hasShopBoost;
                   const lineForBd = hist ?? (teamModal.live && scoresThisGw && p ? p : null);
                   const bd = lineForBd && scoresThisGw ? fantasyPointsBreakdown(lineForBd) : null;
-                  const bowlRaw = bd?.bowling ?? 0;
+                  const bowlRaw = frozen?.bowlingPoints ?? shopRow?.bowlingPoints ?? bd?.bowling ?? 0;
                   const batRaw = bd?.batting ?? 0;
                   const boostBits: string[] = [];
                   if (batterBoost && batRaw > 0) boostBits.push(`bat ${batRaw}→${batRaw * 2}`);
-                  if (playerBowlerBoost && bowlRaw > 0) boostBits.push(`bowl ${bowlRaw}→${bowlRaw * 2}`);
+                  const stackBits: string[] = [];
+                  if (isC || isVC) stackBits.push(`×${capMult}`);
+                  if (isLuckyDip) stackBits.push("×1.5");
+                  if (isPowerplay) stackBits.push("×2");
                   return (
                     <div key={pid} className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3 ring-1 ring-white/10">
                       <div className="min-w-0">
@@ -7569,7 +7574,11 @@ export default function Page() {
                         {showApplied ? (
                           <div className="text-[10px] leading-tight text-zinc-500">
                             {boostBits.length ? <div>{boostBits.join(" · ")}</div> : null}
-                            <div>base {basePts}</div>
+                            <div>
+                              base {basePts}
+                              {stackBits.length ? ` ${stackBits.join(" ")}` : ""}
+                            </div>
+                            {playerBowlerBoost && bowlRaw > 0 ? <div>+ bowl {bowlRaw}×2</div> : null}
                           </div>
                         ) : null}
                       </div>
@@ -7581,7 +7590,7 @@ export default function Page() {
                   );
                 })()}
               <div className="mt-4 text-xs text-zinc-500">
-                Points include captain / vice, Powerplay, and any active Fantasy Shop boosters. Archived weeks use the locked End GW snapshot when available.
+                Points include captain / vice, Powerplay, and any active Fantasy Shop boosters. Bowler Boost adds bowling ×2 after those multipliers. Archived weeks use the locked End GW snapshot when available.
               </div>
             </div>
 

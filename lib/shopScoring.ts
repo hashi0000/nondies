@@ -155,6 +155,7 @@ export type ShopPlayerScoreResult = {
   batterBoost: boolean;
   bowlerBoost: boolean;
   captainMultiplier: number;
+  bowlingPoints?: number;
 };
 
 export function scoreSquadWithShop(args: {
@@ -170,12 +171,14 @@ export function scoreSquadWithShop(args: {
   const withBase = players.map((p) => {
     const bowlingPts = p.line ? fantasyPointsBreakdown(p.line).bowling : 0;
     const qualifiesBowl = playerQualifiesForBowlerBoost(p.line, p.role);
+    const bowlerBoostApplied = Boolean(p.scored && hasBowlerBoost(shop) && qualifiesBowl && bowlingPts > 0);
     const basePoints =
       p.scored && p.line ? Math.round(shopBoostedBasePoints(p.line, shop, p.role) * 10) / 10 : 0;
     return {
       ...p,
       basePoints,
-      bowlerBoostApplied: Boolean(p.scored && hasBowlerBoost(shop) && qualifiesBowl && bowlingPts > 0),
+      bowlingPts,
+      bowlerBoostApplied,
     };
   });
 
@@ -190,7 +193,11 @@ export function scoreSquadWithShop(args: {
     const captainMultiplier = leadershipMultiplier(p.id, team, shop);
     const luckyMult = luckyId === p.id ? 1.5 : 1;
     const powerMult = powerplayId === p.id ? 2 : 1;
-    const appliedPoints = Math.round(p.basePoints * captainMultiplier * luckyMult * powerMult * 10) / 10;
+    const multiplied = p.basePoints * captainMultiplier * luckyMult * powerMult;
+    // Extra bowling ×2 after C/VC/Lucky Dip/Powerplay so VC+PP+Bowl stacks as
+    // (boosted base × 1.5 × 2) + (bowling × 2). Example: 148 × 3 + 130 = 574.
+    const bowlBonus = p.bowlerBoostApplied ? p.bowlingPts * 2 : 0;
+    const appliedPoints = Math.round((multiplied + bowlBonus) * 10) / 10;
     return {
       id: p.id,
       basePoints: p.basePoints,
@@ -203,6 +210,7 @@ export function scoreSquadWithShop(args: {
       batterBoost: hasBatterBoost(shop),
       bowlerBoost: p.bowlerBoostApplied,
       captainMultiplier,
+      bowlingPoints: p.bowlingPts,
     };
   });
 }

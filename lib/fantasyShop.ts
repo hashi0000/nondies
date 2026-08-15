@@ -42,7 +42,8 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
     id: "bowler-boost",
     name: "Bowler Boost",
     cost: 50,
-    description: "Double bowling points for one gameweek.",
+    description:
+      "Double bowling points (wickets, maidens, hauls) for specialist bowlers and anyone who took a wicket or bowled a maiden this gameweek. Runs and fielding are unchanged.",
     category: "bowling",
   },
   {
@@ -115,7 +116,8 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
 /** One-line effect shown when a perk is active on a squad. */
 export const SHOP_ACTIVE_EFFECT: Partial<Record<ShopItemId, string>> = {
   "batter-boost": "Batter Boost: batting points doubled for the whole squad.",
-  "bowler-boost": "Bowler Boost: bowling points (wickets, maidens, hauls) doubled for the whole squad.",
+  "bowler-boost":
+    "Bowler Boost: bowling points doubled for specialist bowlers and anyone who took a wicket or bowled a maiden. Batting and fielding are unchanged.",
   "triple-captain": "Triple Captain: captain scores 3×.",
   "captains-confidence": "Captain's Confidence: captain 2× is locked for this gameweek.",
   "lucky-dip": "Lucky Dip: one squad player scores 1.5× (stacks with C/VC and Powerplay).",
@@ -127,7 +129,7 @@ export const SHOP_PLANNED_RULES: readonly string[] = [
   "One scoring booster per gameweek (Lucky Dip, Batter/Bowler Boost, Triple Captain, or Captain's Confidence). Powerplay is free and always on.",
   "Transfer perks (Free Transfer / Wildcards) can be used alongside a scoring booster.",
   "Triple Captain and Captain's Confidence cannot be used in the same gameweek.",
-  "Batter Boost / Bowler Boost double batting or bowling points across your whole squad.",
+  "Batter Boost doubles batting points across your whole squad. Bowler Boost doubles bowling points only (wickets, maidens, hauls) for specialist bowlers and anyone who took a wicket or bowled a maiden.",
   "Lucky Dip stacks with captain / Powerplay on the chosen player.",
   "A confirmation step is required before spending Fantasy Points.",
 ];
@@ -395,13 +397,20 @@ export function parseTeamFantasyShop(raw: unknown, currentGameweek: number): Tea
   const ownedItemIds = withPowerplay(filterShopItemIds(o.ownedItemIds, ["powerplay"]));
   const purchaseHistory = parsePurchaseHistory(o.purchaseHistory);
   const storedActive = withPowerplay(filterShopItemIds(o.activeItemIds, ["powerplay"]));
-  const liveWeekUnended = storedGw === gw || hasPaidActiveBooster(storedActive);
+  // Stamp behind the live GW means End GW has not rolled this shop yet (purchase may be saved as GW1).
+  const stampBehindLiveWeek = storedGw > 0 && storedGw < gw;
+  const liveWeekUnended =
+    storedGw === gw || storedGw === 0 || stampBehindLiveWeek || hasPaidActiveBooster(storedActive);
 
   let activeItemIds: ShopItemId[];
   let luckyDipPlayerId: number | null = null;
   if (liveWeekUnended) {
-    // Keep whatever they bought for this live week, even if the purchase was stamped with the wrong GW.
-    activeItemIds = fillEmptySlotsFromPurchases(storedActive, purchaseHistory, [gw, storedGw], storedGw !== gw);
+    activeItemIds = fillEmptySlotsFromPurchases(
+      storedActive,
+      purchaseHistory,
+      [gw, storedGw],
+      stampBehindLiveWeek || storedGw === 0,
+    );
     if (o.luckyDipPlayerId != null && Number.isFinite(Number(o.luckyDipPlayerId))) {
       luckyDipPlayerId = Number(o.luckyDipPlayerId);
     }

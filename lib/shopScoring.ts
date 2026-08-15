@@ -1,4 +1,4 @@
-import { fantasyPointsBreakdown, type FantasyStatLine } from "@/lib/fantasyPoints";
+import { clampNonNegativeInt, fantasyPointsBreakdown, type FantasyStatLine } from "@/lib/fantasyPoints";
 import { parseTeamFantasyShop, shopItemById, type TeamFantasyShopState } from "@/lib/fantasyShop";
 
 export type LeadershipTeam = {
@@ -53,11 +53,26 @@ export function hasBowlerBoost(shop: TeamFantasyShopState): boolean {
   return shop.activeItemIds.includes("bowler-boost");
 }
 
+/** Wickets, maidens, or a specialist bowler (role `bowl`) — batting/fielding never get this boost. */
+export function playerQualifiesForBowlerBoost(
+  line: FantasyStatLine | null | undefined,
+  role?: string | null,
+): boolean {
+  if (role === "bowl") return true;
+  if (!line) return false;
+  return clampNonNegativeInt(line.wickets) > 0 || clampNonNegativeInt(line.maidens ?? 0) > 0;
+}
+
 /** Base points after Batter/Bowler boost (before C/VC/Lucky Dip/Powerplay). */
-export function shopBoostedBasePoints(line: FantasyStatLine, shop: TeamFantasyShopState): number {
+export function shopBoostedBasePoints(
+  line: FantasyStatLine,
+  shop: TeamFantasyShopState,
+  role?: string | null,
+): number {
   const bd = fantasyPointsBreakdown(line);
   const batting = hasBatterBoost(shop) ? bd.batting * 2 : bd.batting;
-  const bowling = hasBowlerBoost(shop) ? bd.bowling * 2 : bd.bowling;
+  const bowling =
+    hasBowlerBoost(shop) && playerQualifiesForBowlerBoost(line, role) ? bd.bowling * 2 : bd.bowling;
   return batting + bowling + bd.fieldingOutfield + bd.keeper;
 }
 
@@ -125,6 +140,7 @@ export type ShopPlayerScoreInput = {
   id: number;
   line: FantasyStatLine | null;
   scored: boolean;
+  role?: string | null;
 };
 
 export type ShopPlayerScoreResult = {
@@ -152,9 +168,15 @@ export function scoreSquadWithShop(args: {
   const luckyId = resolveLuckyDipPlayerId(shop, squadPlayerIds, teamUid);
 
   const withBase = players.map((p) => {
+    const bowlingPts = p.line ? fantasyPointsBreakdown(p.line).bowling : 0;
+    const qualifiesBowl = playerQualifiesForBowlerBoost(p.line, p.role);
     const basePoints =
-      p.scored && p.line ? Math.round(shopBoostedBasePoints(p.line, shop) * 10) / 10 : 0;
-    return { ...p, basePoints };
+      p.scored && p.line ? Math.round(shopBoostedBasePoints(p.line, shop, p.role) * 10) / 10 : 0;
+    return {
+      ...p,
+      basePoints,
+      bowlerBoostApplied: Boolean(p.scored && hasBowlerBoost(shop) && qualifiesBowl && bowlingPts > 0),
+    };
   });
 
   const powerplayId = resolvePowerplayPlayerId(
@@ -179,7 +201,7 @@ export function scoreSquadWithShop(args: {
       isLuckyDip: luckyId === p.id,
       isPowerplay: powerplayId === p.id,
       batterBoost: hasBatterBoost(shop),
-      bowlerBoost: hasBowlerBoost(shop),
+      bowlerBoost: p.bowlerBoostApplied,
       captainMultiplier,
     };
   });

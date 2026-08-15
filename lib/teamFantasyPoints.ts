@@ -33,7 +33,7 @@ function playerScoresInGameweek(team: PointsTeam, playerId: number, scoringGamew
 /** Live squad points for the current gameweek (same rules as the main leaderboard). */
 export function computeWeekTeamPoints(
   team: PointsTeam,
-  playerById: Map<number, FantasyStatLine>,
+  playerById: Map<number, ScoringPlayerLine>,
   scoringGameweek: number,
 ): number {
   const shop = parseShopForScoring(team.fantasyShop, scoringGameweek);
@@ -45,7 +45,7 @@ export function computeWeekTeamPoints(
     teamUid,
     players: team.players.map((id) => {
       const scored = playerScoresInGameweek(team, id, scoringGameweek);
-      return { id, line: scored ? (playerById.get(id) ?? null) : null, scored };
+      return { id, line: scored ? (playerById.get(id) ?? null) : null, scored, role: playerById.get(id)?.role };
     }),
   });
   return sumAppliedShopScores(scores);
@@ -54,7 +54,7 @@ export function computeWeekTeamPoints(
 /** Total league points earned so far — completed GWs + this week's live score. */
 export function totalEarnedFantasyPoints(
   team: PointsTeam,
-  playerById: Map<number, FantasyStatLine>,
+  playerById: Map<number, ScoringPlayerLine>,
   scoringGameweek: number,
 ): number {
   const cumulative = Number(team.cumulativePoints ?? 0);
@@ -62,7 +62,10 @@ export function totalEarnedFantasyPoints(
   return Math.max(0, Math.round((cumulative + week) * 10) / 10);
 }
 
-export function parsePlayerStatLine(data: Record<string, unknown>): FantasyStatLine {
+export type ScoringPlayerLine = FantasyStatLine & { role?: string };
+
+export function parsePlayerStatLine(data: Record<string, unknown>): ScoringPlayerLine {
+  const role = typeof data.role === "string" ? data.role : undefined;
   return {
     runs: Number(data.runs ?? 0),
     fours: Number(data.fours ?? 0),
@@ -75,5 +78,6 @@ export function parsePlayerStatLine(data: Record<string, unknown>): FantasyStatL
     runOuts: Number(data.runOuts ?? 0),
     didNotBat: Boolean(data.didNotBat),
     didNotPlay: Boolean(data.didNotPlay),
+    ...(role ? { role } : {}),
   };
 }

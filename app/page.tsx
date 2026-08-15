@@ -49,6 +49,7 @@ import {
 import { auth, db, firebaseProjectId } from "@/lib/firebase";
 import { PlayerCompareCharts } from "@/components/PlayerCompareCharts";
 import { ActivePerksSummary } from "@/components/ActivePerksSummary";
+import { paidActivePerks } from "@/lib/shopWalletStorage";
 import { appendPriceHistoryWeek, parsePriceHistory } from "@/lib/playerPriceHistory";
 import { calculatePoints, clampNonNegativeInt, fantasyPointsBreakdown, type FantasyStatLine } from "@/lib/fantasyPoints";
 import {
@@ -63,7 +64,7 @@ import {
   type TeamPointsBackupDoc,
 } from "@/lib/teamPointsBackup";
 import { parseTeamFantasyShop, shopStateAfterGameweekEnd, SHOP_ACTIVE_EFFECT, type ShopItemId } from "@/lib/fantasyShop";
-import { hasBatterBoost, hasBowlerBoost, isLuckyDipPlayer, parseShopForScoring, scoreSquadWithShop, sumAppliedShopScores, effectiveFreeTransfersForShop } from "@/lib/shopScoring";
+import { hasBatterBoost, isLuckyDipPlayer, parseShopForScoring, scoreSquadWithShop, sumAppliedShopScores, effectiveFreeTransfersForShop } from "@/lib/shopScoring";
 import { totalEarnedFantasyPoints } from "@/lib/teamFantasyPoints";
 import {
   FREE_TRANSFERS_PER_WEEK,
@@ -1321,7 +1322,7 @@ function computeWeekPoints(team: SavedTeam, byId: Map<number, Player>, scoringGa
     players: team.players.map((id) => {
       const scored = playerScoresInGameweek(team, id, scoringGameweek);
       const p = byId.get(id);
-      return { id, line: scored && p ? p : null, scored };
+      return { id, line: scored && p ? p : null, scored, role: p?.role };
     }),
   });
   return sumAppliedShopScores(scores);
@@ -1341,7 +1342,7 @@ function buildGwPlayerWeekScores(
     players: team.players.map((id) => {
       const scored = playerScoresInGameweek(team, id, scoringGameweek);
       const p = byId.get(id);
-      return { id, line: scored && p ? p : null, scored };
+      return { id, line: scored && p ? p : null, scored, role: p?.role };
     }),
   });
   return scoredRows.map((row) => {
@@ -1378,7 +1379,7 @@ function buildGwPlayerWeekScoresFromHistory(
       const p = byId.get(id);
       const hist = (p?.history ?? []).find((h) => h.week === gameweek);
       const scored = Boolean(hist) && !hist?.didNotPlay;
-      return { id, line: scored && hist ? hist : null, scored };
+      return { id, line: scored && hist ? hist : null, scored, role: p?.role };
     }),
   });
   return scoredRows.map((row) => {
@@ -1413,7 +1414,7 @@ function computeWeekPointsPreferHistory(
   const liveInputs = team.players.map((id) => {
     const scored = playerScoresInGameweek(team, id, scoringGameweek);
     const p = byId.get(id);
-    return { id, line: scored && p ? p : null, scored };
+    return { id, line: scored && p ? p : null, scored, role: p?.role };
   });
   const liveScores = scoreSquadWithShop({
     team,
@@ -1442,12 +1443,12 @@ function computeWeekPointsPreferHistory(
     teamUid: team.uid,
     players: team.players.map((id) => {
       if (!playerScoresInGameweek(team, id, scoringGameweek)) {
-        return { id, line: null, scored: false };
+        return { id, line: null, scored: false, role: byId.get(id)?.role };
       }
       const p = byId.get(id);
       const hist = (p?.history ?? []).find((h) => h.week === scoringGameweek);
       const scored = Boolean(hist) && !hist?.didNotPlay;
-      return { id, line: scored && hist ? hist : null, scored };
+      return { id, line: scored && hist ? hist : null, scored, role: p?.role };
     }),
   });
   const histRounded = sumAppliedShopScores(histScores);
@@ -3353,6 +3354,7 @@ export default function Page() {
           runOuts: p.runOuts,
           didNotBat: p.didNotBat,
           didNotPlay: p.didNotPlay,
+          role: p.role,
         },
       ]),
     );
@@ -5912,6 +5914,13 @@ export default function Page() {
                               <div className="mt-2 flex flex-wrap gap-2 text-xs">
                                 <Pill><span className="text-zinc-400">Captain</span>{" "}<span className="font-semibold">{row.capName}</span></Pill>
                                 <Pill><span className="text-zinc-400">VC</span>{" "}<span className="font-semibold">{row.vcName}</span></Pill>
+                                {paidActivePerks(
+                                  parseTeamFantasyShop(row.team.fantasyShop, viewingGameweek).activeItemIds,
+                                ).map((item) => (
+                                  <Pill key={item.id} tone="blue">
+                                    {item.name}
+                                  </Pill>
+                                ))}
                                 {row.fieldingLabel ? (
                                   <Pill tone="green">
                                     <span className="text-zinc-400">Fielding</span>{" "}
@@ -7443,8 +7452,6 @@ export default function Page() {
                   const shop = parseShopForScoring(teamModal.team.fantasyShop, teamModal.gameweek);
                   const batterBoost =
                     hasBatterBoost(shop) || Boolean(teamModal.playerScores?.some((s) => s.batterBoost));
-                  const bowlerBoost =
-                    hasBowlerBoost(shop) || Boolean(teamModal.playerScores?.some((s) => s.bowlerBoost));
                   const paidPerkLines = shop.activeItemIds
                     .map((id) => SHOP_ACTIVE_EFFECT[id])
                     .filter((line): line is string => Boolean(line));
@@ -7461,12 +7468,12 @@ export default function Page() {
                               if (teamModal.live) {
                                 const scored = playerScoresInGameweek(teamModal.team, id, teamModal.gameweek);
                                 const pl = pool.get(id);
-                                return { id, line: scored && pl ? pl : null, scored };
+                                return { id, line: scored && pl ? pl : null, scored, role: pl?.role };
                               }
                               const pl = pool.get(id);
                               const h = (pl?.history ?? []).find((x) => x.week === teamModal.gameweek);
                               const scored = Boolean(h) && !h?.didNotPlay;
-                              return { id, line: scored && h ? h : null, scored };
+                              return { id, line: scored && h ? h : null, scored, role: pl?.role };
                             }),
                           })
                     )?.map((row) => [row.id, row]) ?? [],
@@ -7517,7 +7524,8 @@ export default function Page() {
                         )
                       : null;
                   const missingRecord = !teamModal.live && !frozen && !hist;
-                  const hasShopBoost = batterBoost || bowlerBoost;
+                  const playerBowlerBoost = Boolean(frozen?.bowlerBoost ?? shopRow?.bowlerBoost);
+                  const hasShopBoost = batterBoost || playerBowlerBoost;
                   const showApplied = isC || isVC || isLuckyDip || isPowerplay || hasShopBoost;
                   return (
                     <div key={pid} className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3 ring-1 ring-white/10">
@@ -7538,7 +7546,7 @@ export default function Page() {
                           {isVC ? <Pill tone="amber">VC ×1.5</Pill> : null}
                           {isLuckyDip ? <Pill tone="amber">Lucky Dip ×1.5</Pill> : null}
                           {isPowerplay ? <Pill tone="green">Powerplay ×2</Pill> : null}
-                          {bowlerBoost ? <Pill tone="blue">Bowl ×2</Pill> : null}
+                          {playerBowlerBoost ? <Pill tone="blue">Bowl ×2</Pill> : null}
                           {batterBoost ? <Pill tone="amber">Bat ×2</Pill> : null}
                           {isWK ? <Pill tone="blue">WK</Pill> : null}
                           {fieldingLabel ? <Pill tone="green">{fieldingLabel}</Pill> : null}

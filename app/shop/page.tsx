@@ -35,8 +35,8 @@ import {
   parsePlayerStatLine,
   totalEarnedFantasyPoints,
   type PointsTeam,
+  type ScoringPlayerLine,
 } from "@/lib/teamFantasyPoints";
-import type { FantasyStatLine } from "@/lib/fantasyPoints";
 
 const APP_NAME = "Nondies Fantasy League";
 
@@ -219,7 +219,7 @@ export default function FantasyShopPage() {
   const [buying, setBuying] = useState(false);
   const [savedSquad, setSavedSquad] = useState<SavedSquad | null>(null);
   const [playersById, setPlayersById] = useState<Map<number, ShopPlayer>>(new Map());
-  const [playerStatsById, setPlayerStatsById] = useState<Map<number, FantasyStatLine>>(new Map());
+  const [playerStatsById, setPlayerStatsById] = useState<Map<number, ScoringPlayerLine>>(new Map());
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -269,7 +269,7 @@ export default function FantasyShopPage() {
     });
     const unsubPlayers = onSnapshot(collection(db, "players"), (snap) => {
       const map = new Map<number, ShopPlayer>();
-      const stats = new Map<number, FantasyStatLine>();
+      const stats = new Map<number, ScoringPlayerLine>();
       for (const d of snap.docs) {
         const data = d.data();
         const id = Number(data.id ?? d.id);

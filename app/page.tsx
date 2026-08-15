@@ -62,8 +62,8 @@ import {
   type SeasonGwPointsEntry,
   type TeamPointsBackupDoc,
 } from "@/lib/teamPointsBackup";
-import { parseTeamFantasyShop, type ShopItemId } from "@/lib/fantasyShop";
-import { isLuckyDipPlayer, parseShopForScoring, scoreSquadWithShop, sumAppliedShopScores, effectiveFreeTransfersForShop } from "@/lib/shopScoring";
+import { parseTeamFantasyShop, shopStateAfterGameweekEnd, SHOP_ACTIVE_EFFECT, type ShopItemId } from "@/lib/fantasyShop";
+import { hasBatterBoost, hasBowlerBoost, isLuckyDipPlayer, parseShopForScoring, scoreSquadWithShop, sumAppliedShopScores, effectiveFreeTransfersForShop } from "@/lib/shopScoring";
 import { totalEarnedFantasyPoints } from "@/lib/teamFantasyPoints";
 import {
   FREE_TRANSFERS_PER_WEEK,
@@ -1356,6 +1356,8 @@ function buildGwPlayerWeekScores(
       isViceCaptain: row.isViceCaptain,
       isLuckyDip: row.isLuckyDip,
       isPowerplay: row.isPowerplay,
+      batterBoost: row.batterBoost,
+      bowlerBoost: row.bowlerBoost,
     };
   });
 }
@@ -1391,6 +1393,8 @@ function buildGwPlayerWeekScoresFromHistory(
       isViceCaptain: row.isViceCaptain,
       isLuckyDip: row.isLuckyDip,
       isPowerplay: row.isPowerplay,
+      batterBoost: row.batterBoost,
+      bowlerBoost: row.bowlerBoost,
     };
   });
 }
@@ -2657,7 +2661,7 @@ export default function Page() {
     const unsub = onSnapshot(gsRef, (snap) => {
       if (snap.exists()) {
         const data = snap.data();
-        setCurrentGameweek(data.currentGameweek ?? 1);
+        setCurrentGameweek(Math.max(1, Math.floor(Number(data.currentGameweek ?? 1)) || 1));
         setGameweekOpenedAt(parseGameweekOpenedAt(data.gameweekOpenedAt));
         setDnpHistoryRepairDone(Boolean(data.dnpHistoryRepairDone));
         const fsr = data.freeSquadRebuildGameweek;
@@ -3598,7 +3602,11 @@ export default function Page() {
     const doc = gwTeamsArchive.find((g) => g.gameweek === leaderboardGwView);
     if (!doc) return [];
     const rows: LeaderboardRow[] = doc.teams.map((ts) => {
-      const team = gwSnapshotToSavedTeam(ts) as SavedTeam;
+      const liveTeam = teams.find((t) => t.uid === ts.uid);
+      const team = {
+        ...gwSnapshotToSavedTeam(ts),
+        fantasyShop: ts.fantasyShop ?? liveTeam?.fantasyShop,
+      } as SavedTeam;
       const fielding = squadFieldingSummaryForGameweek(team, playersById, leaderboardGwView, false);
       const playerScores =
         ts.playerScores && ts.playerScores.length > 0 && sumAppliedWeekPoints(ts.playerScores) > 0
@@ -3633,7 +3641,7 @@ export default function Page() {
     });
     rows.sort((a, b) => b.weekPts - a.weekPts || b.total - a.total || a.team.name.localeCompare(b.team.name));
     return rows;
-  }, [leaderboardGwView, gwTeamsArchive, playersById]);
+  }, [leaderboardGwView, gwTeamsArchive, playersById, teams]);
 
   const displayedLeaderboard: LeaderboardRow[] = historicalLeaderboard ?? leaderboard;
   const leaderboardViewLabel =
@@ -4587,6 +4595,7 @@ export default function Page() {
               if (Number.isFinite(n)) playerJoinedGameweek[k] = Math.floor(n);
             }
           }
+          const liveShop = parseTeamFantasyShop(team.fantasyShop, gw);
           teamSnapshots.push({
             uid: team.uid,
             name: team.name,
@@ -4603,6 +4612,7 @@ export default function Page() {
             transferPenaltyPointsApplied: team.transferPenaltyPointsApplied ?? 0,
             playerJoinedGameweek,
             playerScores: buildGwPlayerWeekScores(team, playersByIdForGw, gw),
+            fantasyShop: liveShop,
           });
           teamBatch.update(doc(db, "teams", team.uid), {
             name: team.name,
@@ -4617,6 +4627,7 @@ export default function Page() {
             transferPenaltyPointsApplied: 0,
             playerJoinedGameweek,
             playerPurchasePrices,
+            fantasyShop: shopStateAfterGameweekEnd(liveShop, gw + 1),
             seasonPointsByGw: seasonPointsByGwFromEnd(
               parseSeasonPointsByGw(team.seasonPointsByGw),
               gw,
@@ -4756,8 +4767,12 @@ export default function Page() {
           if (!gwSnap.exists()) continue;
           const gwDoc = parseGwTeamsDoc(gwSnap.data() as Record<string, unknown>);
           if (!gwDoc?.teams.length) continue;
-          const teams = gwDoc.teams.map((ts) => {
-            const team = gwSnapshotToSavedTeam(ts) as SavedTeam;
+          const repaired = gwDoc.teams.map((ts) => {
+            const live = teams.find((t) => t.uid === ts.uid);
+            const team = {
+              ...gwSnapshotToSavedTeam(ts),
+              fantasyShop: ts.fantasyShop ?? live?.fantasyShop,
+            } as SavedTeam;
             const playerScores = buildGwPlayerWeekScoresFromHistory(team, playersById, gw);
             const rebuiltWeek = sumAppliedWeekPoints(playerScores);
             const weekPoints = ts.weekPoints > 0 ? ts.weekPoints : rebuiltWeek;
@@ -4776,7 +4791,7 @@ export default function Page() {
             gwRef,
             {
               ...gwSnap.data(),
-              teams,
+              teams: repaired,
               scoresRepairedAt: serverTimestamp(),
               scoresRepairedBy: authUser.uid,
             },
@@ -7423,10 +7438,16 @@ export default function Page() {
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
-              <div className="grid gap-2">
-                {(() => {
+              {(() => {
                   const pool = teamModal.live ? scoringPlayersById : playersById;
                   const shop = parseShopForScoring(teamModal.team.fantasyShop, teamModal.gameweek);
+                  const batterBoost =
+                    hasBatterBoost(shop) || Boolean(teamModal.playerScores?.some((s) => s.batterBoost));
+                  const bowlerBoost =
+                    hasBowlerBoost(shop) || Boolean(teamModal.playerScores?.some((s) => s.bowlerBoost));
+                  const paidPerkLines = shop.activeItemIds
+                    .map((id) => SHOP_ACTIVE_EFFECT[id])
+                    .filter((line): line is string => Boolean(line));
                   const shopScoreById = new Map(
                     (
                       teamModal.playerScores?.length
@@ -7450,7 +7471,15 @@ export default function Page() {
                           })
                     )?.map((row) => [row.id, row]) ?? [],
                   );
-                  return (teamModal.team.players ?? []).map((pid) => {
+                  return (
+                    <>
+              {paidPerkLines.length ? (
+                <div className="mb-3 rounded-xl bg-sky-500/10 px-3 py-2 text-xs text-sky-100 ring-1 ring-sky-500/30">
+                  {paidPerkLines.join(" ")}
+                </div>
+              ) : null}
+              <div className="grid gap-2">
+                {(teamModal.team.players ?? []).map((pid) => {
                   const frozen = teamModal.playerScores?.find((s) => s.id === pid);
                   const p = pool.get(pid);
                   const hist = !teamModal.live
@@ -7488,6 +7517,8 @@ export default function Page() {
                         )
                       : null;
                   const missingRecord = !teamModal.live && !frozen && !hist;
+                  const hasShopBoost = batterBoost || bowlerBoost;
+                  const showApplied = isC || isVC || isLuckyDip || isPowerplay || hasShopBoost;
                   return (
                     <div key={pid} className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3 ring-1 ring-white/10">
                       <div className="min-w-0">
@@ -7507,6 +7538,8 @@ export default function Page() {
                           {isVC ? <Pill tone="amber">VC ×1.5</Pill> : null}
                           {isLuckyDip ? <Pill tone="amber">Lucky Dip ×1.5</Pill> : null}
                           {isPowerplay ? <Pill tone="green">Powerplay ×2</Pill> : null}
+                          {bowlerBoost ? <Pill tone="blue">Bowl ×2</Pill> : null}
+                          {batterBoost ? <Pill tone="amber">Bat ×2</Pill> : null}
                           {isWK ? <Pill tone="blue">WK</Pill> : null}
                           {fieldingLabel ? <Pill tone="green">{fieldingLabel}</Pill> : null}
                           {!scoresThisGw ? <Pill tone="neutral">Did not score this GW</Pill> : null}
@@ -7515,18 +7548,20 @@ export default function Page() {
                       </div>
                       <div className="text-right">
                         <div className="text-xs font-medium text-zinc-400">
-                          {isC || isVC || isLuckyDip || isPowerplay ? "Applied" : "Points"}
+                          {showApplied ? "Applied" : "Points"}
                         </div>
                         <div className="text-base font-black text-white">{appliedPts}</div>
-                        {isC || isVC || isLuckyDip || isPowerplay ? (
+                        {showApplied ? (
                           <div className="text-[10px] text-zinc-500">base {basePts}</div>
                         ) : null}
                       </div>
                     </div>
                   );
-                  });
-                })()}
+                })}
               </div>
+                    </>
+                  );
+                })()}
               <div className="mt-4 text-xs text-zinc-500">
                 Points include captain / vice, Powerplay, and any active Fantasy Shop boosters. Archived weeks use the locked End GW snapshot when available.
               </div>

@@ -136,6 +136,8 @@ export type ShopPlayerScoreResult = {
   isViceCaptain: boolean;
   isLuckyDip: boolean;
   isPowerplay: boolean;
+  batterBoost: boolean;
+  bowlerBoost: boolean;
   captainMultiplier: number;
 };
 
@@ -176,6 +178,8 @@ export function scoreSquadWithShop(args: {
       isViceCaptain,
       isLuckyDip: luckyId === p.id,
       isPowerplay: powerplayId === p.id,
+      batterBoost: hasBatterBoost(shop),
+      bowlerBoost: hasBowlerBoost(shop),
       captainMultiplier,
     };
   });

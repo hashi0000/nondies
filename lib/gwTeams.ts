@@ -18,6 +18,8 @@ export type GwPlayerWeekScore = {
   isViceCaptain?: boolean;
   isLuckyDip?: boolean;
   isPowerplay?: boolean;
+  batterBoost?: boolean;
+  bowlerBoost?: boolean;
 };
 
 export type GwTeamSnapshot = {
@@ -37,6 +39,8 @@ export type GwTeamSnapshot = {
   playerJoinedGameweek?: Record<string, number>;
   /** Per-player fantasy points for this GW (stored at End GW so archives stay readable). */
   playerScores?: GwPlayerWeekScore[];
+  /** Shop perks that were active when this GW was locked. */
+  fantasyShop?: unknown;
 };
 
 export type GwTeamsDoc = {
@@ -203,10 +207,15 @@ export function parseGwTeamsDoc(raw: Record<string, unknown>): GwTeamsDoc | null
                 scored: s.scored !== false,
                 isCaptain: Boolean(s.isCaptain),
                 isViceCaptain: Boolean(s.isViceCaptain),
+                isLuckyDip: Boolean(s.isLuckyDip),
+                isPowerplay: Boolean(s.isPowerplay),
+                batterBoost: Boolean(s.batterBoost),
+                bowlerBoost: Boolean(s.bowlerBoost),
               };
             })
             .filter((x): x is NonNullable<typeof x> => x != null)
         : undefined,
+      fantasyShop: row.fantasyShop,
     });
   }
   return {

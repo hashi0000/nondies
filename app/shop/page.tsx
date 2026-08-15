@@ -210,7 +210,8 @@ export default function FantasyShopPage() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [leagueBalance, setLeagueBalance] = useState(0);
-  const [currentGameweek, setCurrentGameweek] = useState(1);
+  const [currentGameweek, setCurrentGameweek] = useState<number | null>(null);
+  const [gameweekReady, setGameweekReady] = useState(false);
   const [teamShop, setTeamShop] = useState<TeamFantasyShopState | null>(null);
   const [hasTeamDoc, setHasTeamDoc] = useState(false);
   const [pendingItem, setPendingItem] = useState<ShopItem | null>(null);
@@ -231,10 +232,16 @@ export default function FantasyShopPage() {
 
   useEffect(() => {
     if (!authUser) return;
-    const gsRef = doc(db, "gameState", "current");
-    const unsubGs = onSnapshot(gsRef, (snap) => {
-      setCurrentGameweek(snap.exists() ? Number(snap.data()?.currentGameweek ?? 1) : 1);
+    const unsubGs = onSnapshot(doc(db, "gameState", "current"), (snap) => {
+      const gw = snap.exists() ? Math.floor(Number(snap.data()?.currentGameweek ?? 1)) : 1;
+      setCurrentGameweek(Number.isFinite(gw) && gw >= 1 ? gw : 1);
+      setGameweekReady(true);
     });
+    return () => unsubGs();
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser || !gameweekReady || currentGameweek == null) return;
     const unsubTeam = onSnapshot(doc(db, "teams", authUser.uid), (snap) => {
       setHasTeamDoc(snap.exists());
       const pts = snap.exists() ? Number(snap.data()?.cumulativePoints ?? 0) : 0;
@@ -274,11 +281,10 @@ export default function FantasyShopPage() {
       setPlayerStatsById(stats);
     });
     return () => {
-      unsubGs();
       unsubTeam();
       unsubPlayers();
     };
-  }, [authUser, currentGameweek]);
+  }, [authUser, currentGameweek, gameweekReady]);
 
   const pointsTeam = useMemo((): PointsTeam | null => {
     if (!savedSquad || !authUser) return null;
@@ -293,8 +299,10 @@ export default function FantasyShopPage() {
     };
   }, [savedSquad, leagueBalance, authUser, teamShop]);
 
+  const scoringGameweek = currentGameweek ?? 1;
+
   const spendableBalance = useMemo(() => {
-    if (!pointsTeam || pointsTeam.players.length === 0) return leagueBalance;
+    if (!pointsTeam || pointsTeam.players.length === 0 || currentGameweek == null) return leagueBalance;
     return totalEarnedFantasyPoints(pointsTeam, playerStatsById, currentGameweek);
   }, [pointsTeam, playerStatsById, currentGameweek, leagueBalance]);
 
@@ -336,6 +344,10 @@ export default function FantasyShopPage() {
     setNotice(null);
     if (item.alwaysFree || item.alwaysActive) return;
     if (!wallet) return;
+    if (!gameweekReady || currentGameweek == null) {
+      setNotice("Still loading the current gameweek — try again in a moment.");
+      return;
+    }
 
     const alreadyOwned = wallet.ownedItemIds.includes(item.id);
     if (!alreadyOwned && spendableBalance < item.cost) {
@@ -356,6 +368,10 @@ export default function FantasyShopPage() {
 
   async function confirmPurchase() {
     if (!pendingItem || !wallet || !teamShop || !authUser) return;
+    if (!gameweekReady || currentGameweek == null) {
+      setNotice("Still loading the current gameweek — try again in a moment.");
+      return;
+    }
     const item = pendingItem;
     const alreadyOwned = wallet.ownedItemIds.includes(item.id);
     const cost = alreadyOwned ? 0 : item.cost;
@@ -458,7 +474,7 @@ export default function FantasyShopPage() {
                 </div>
                 <div className="mt-1 text-3xl font-bold tabular-nums text-white">{formatFantasyPoints(displayBalance)}</div>
                 <p className="mt-1 text-xs text-zinc-400">
-                  Your league total for GW{currentGameweek} — completed gameweeks plus this week&apos;s live squad score.
+                  Your league total for GW{scoringGameweek} — completed gameweeks plus this week&apos;s live squad score.
                   Purchases deduct from your team total on the leaderboard.
                 </p>
               </div>
@@ -476,7 +492,7 @@ export default function FantasyShopPage() {
         <ActivePerksSummary
           className="mt-5"
           activeItemIds={wallet?.activeItemIds ?? ["powerplay"]}
-          gameweek={currentGameweek}
+          gameweek={scoringGameweek}
         />
 
         <section className="mt-5 rounded-2xl border border-white/10 bg-zinc-900/50 p-5 ring-1 ring-white/10">
@@ -545,7 +561,9 @@ export default function FantasyShopPage() {
               const owned = wallet?.ownedItemIds.includes(item.id) ?? item.alwaysActive ?? false;
               const active = wallet?.activeItemIds.includes(item.id) ?? item.alwaysActive ?? false;
               let disabledReason: string | null = null;
-              if (wallet && isPaidBooster(item)) {
+              if (!gameweekReady) {
+                disabledReason = "Loading current gameweek…";
+              } else if (wallet && isPaidBooster(item)) {
                 const conflict = hasConflictingActiveBooster(item, wallet.activeItemIds);
                 if (conflict && !active) {
                   disabledReason = `Conflicts with active ${conflict.name}.`;
@@ -618,7 +636,7 @@ export default function FantasyShopPage() {
             <p className="mt-2 text-sm leading-relaxed text-zinc-300">
               {wallet?.ownedItemIds.includes(pendingItem.id) ? (
                 <>
-                  Activate <strong className="text-white">{pendingItem.name}</strong> for GW{currentGameweek}?
+                  Activate <strong className="text-white">{pendingItem.name}</strong> for GW{scoringGameweek}?
                 </>
               ) : (
                 <>
@@ -631,7 +649,7 @@ export default function FantasyShopPage() {
             <p className="mt-3 text-xs text-amber-200/90">
               {wallet?.ownedItemIds.includes(pendingItem.id)
                 ? "Re-activating an owned perk does not cost extra FP."
-                : `Your league total will drop by ${formatFantasyPoints(pendingItem.cost)}. Booster effects in scoring/transfers are not wired yet.`}
+                : `Your league total will drop by ${formatFantasyPoints(pendingItem.cost)}. Bowler/Batter Boost, Triple Captain, Lucky Dip, Powerplay, and transfer perks apply to this gameweek once confirmed.`}
             </p>
             <div className="mt-5 flex flex-wrap gap-2">
               <button

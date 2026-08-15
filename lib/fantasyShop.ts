@@ -112,7 +112,17 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
   },
 ] as const;
 
-/** Shop rules shown in the UI. */
+/** One-line effect shown when a perk is active on a squad. */
+export const SHOP_ACTIVE_EFFECT: Partial<Record<ShopItemId, string>> = {
+  "batter-boost": "Batter Boost: batting points doubled for the whole squad.",
+  "bowler-boost": "Bowler Boost: bowling points (wickets, maidens, hauls) doubled for the whole squad.",
+  "triple-captain": "Triple Captain: captain scores 3×.",
+  "captains-confidence": "Captain's Confidence: captain 2× is locked for this gameweek.",
+  "lucky-dip": "Lucky Dip: one squad player scores 1.5× (stacks with C/VC and Powerplay).",
+  "wildcard-lite": "Wildcard Lite: unlimited transfers this gameweek.",
+  "full-wildcard": "Full Wildcard: unlimited transfers for the rest of the season.",
+  "free-transfer": "Free Transfer: one extra transfer with no point hit.",
+};
 export const SHOP_PLANNED_RULES: readonly string[] = [
   "One scoring booster per gameweek (Lucky Dip, Batter/Bowler Boost, Triple Captain, or Captain's Confidence). Powerplay is free and always on.",
   "Transfer perks (Free Transfer / Wildcards) can be used alongside a scoring booster.",
@@ -207,10 +217,70 @@ export type TeamFantasyShopState = {
 
 const SHOP_ITEM_ID_SET = new Set<string>(SHOP_ITEMS.map((item) => item.id));
 
+export function coerceGameweek(n: unknown): number {
+  const v = Math.floor(Number(n));
+  return Number.isFinite(v) && v >= 1 ? v : 0;
+}
+
+function asUnknownList(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === "object") return Object.values(raw);
+  return [];
+}
+
 function filterShopItemIds(raw: unknown, fallback: ShopItemId[]): ShopItemId[] {
-  if (!Array.isArray(raw)) return fallback;
-  const ids = raw.filter((x): x is ShopItemId => typeof x === "string" && SHOP_ITEM_ID_SET.has(x));
+  const ids = asUnknownList(raw).filter(
+    (x): x is ShopItemId => typeof x === "string" && SHOP_ITEM_ID_SET.has(x),
+  );
   return ids.length ? [...new Set(ids)] : fallback;
+}
+
+function withPowerplay(ids: ShopItemId[]): ShopItemId[] {
+  return ids.includes("powerplay") ? ids : (["powerplay", ...ids] as ShopItemId[]);
+}
+
+function applyShopPurchaseToActive(
+  activeItemIds: ShopItemId[],
+  item: ShopItem,
+): ShopItemId[] {
+  const slot = shopActiveSlot(item);
+  let next = [...activeItemIds];
+  if (slot === "scoring" || slot === "transfer") {
+    next = next.filter((id) => {
+      if (id === "powerplay") return true;
+      const active = shopItemById(id);
+      if (!active) return true;
+      return shopActiveSlot(active) !== slot;
+    });
+  }
+  if (!next.includes(item.id)) next.push(item.id);
+  return next;
+}
+
+/** Rebuild which perks were on for a gameweek from that week's purchases (plus Powerplay / permanents). */
+export function reconstructActiveShopForGameweek(
+  ownedItemIds: ShopItemId[],
+  purchaseHistory: ShopPurchaseRecord[],
+  gameweek: number,
+): { activeItemIds: ShopItemId[]; luckyDipPlayerId: number | null } {
+  let activeItemIds: ShopItemId[] = ["powerplay"];
+  for (const id of ownedItemIds) {
+    const item = shopItemById(id);
+    if (item?.permanent && !activeItemIds.includes(id)) activeItemIds.push(id);
+  }
+
+  const gwPurchases = purchaseHistory
+    .filter((p) => coerceGameweek(p.gameweek) === gameweek)
+    .slice()
+    .reverse();
+
+  for (const rec of gwPurchases) {
+    const item = shopItemById(rec.itemId);
+    if (!item || item.alwaysFree) continue;
+    activeItemIds = applyShopPurchaseToActive(activeItemIds, item);
+  }
+
+  return { activeItemIds: withPowerplay(activeItemIds), luckyDipPlayerId: null };
 }
 
 function parsePurchaseHistory(raw: unknown): ShopPurchaseRecord[] {
@@ -243,29 +313,107 @@ export function emptyTeamFantasyShop(gameweek: number): TeamFantasyShopState {
   };
 }
 
-export function parseTeamFantasyShop(raw: unknown, currentGameweek: number): TeamFantasyShopState {
-  if (!raw || typeof raw !== "object") return emptyTeamFantasyShop(currentGameweek);
-  const o = raw as Record<string, unknown>;
-  const storedGw = Number(o.activeGameweek);
-  const ownedItemIds = filterShopItemIds(o.ownedItemIds, ["powerplay"]);
-  let activeItemIds = filterShopItemIds(o.activeItemIds, ["powerplay"]);
-  let luckyDipPlayerId: number | null = null;
-  if (!Number.isFinite(storedGw) || storedGw !== currentGameweek) {
-    // New gameweek: clear one-week boosters; keep permanent owned items + Powerplay.
-    activeItemIds = ["powerplay"];
-    for (const id of ownedItemIds) {
-      const item = shopItemById(id);
-      if (item?.permanent && !activeItemIds.includes(id)) activeItemIds.push(id);
-    }
-  } else if (o.luckyDipPlayerId != null && Number.isFinite(Number(o.luckyDipPlayerId))) {
-    luckyDipPlayerId = Number(o.luckyDipPlayerId);
+function idsInSlot(ids: ShopItemId[], slot: ShopActiveSlot): ShopItemId[] {
+  return ids.filter((id) => {
+    if (id === "powerplay") return false;
+    const item = shopItemById(id);
+    return item ? shopActiveSlot(item) === slot : false;
+  });
+}
+
+function latestPurchasedItemForSlot(
+  purchaseHistory: ShopPurchaseRecord[],
+  slot: ShopActiveSlot,
+  onlyGameweek?: number,
+): ShopItem | null {
+  for (const rec of purchaseHistory) {
+    if (onlyGameweek != null && coerceGameweek(rec.gameweek) !== onlyGameweek) continue;
+    const item = shopItemById(rec.itemId);
+    if (!item || item.alwaysFree) continue;
+    if (shopActiveSlot(item) === slot) return item;
   }
-  if (!activeItemIds.includes("powerplay")) activeItemIds = ["powerplay", ...activeItemIds];
+  return null;
+}
+
+/** Fill empty scoring/transfer/standalone slots from purchases (this GW first, then fallbacks). */
+function fillEmptySlotsFromPurchases(
+  activeItemIds: ShopItemId[],
+  purchaseHistory: ShopPurchaseRecord[],
+  preferGameweeks: number[],
+  allowAnyGameweek: boolean,
+): ShopItemId[] {
+  let next = [...activeItemIds];
+  for (const slot of ["scoring", "transfer", "standalone"] as const) {
+    if (idsInSlot(next, slot).length) continue;
+    let item: ShopItem | null = null;
+    const seen = new Set<number>();
+    for (const g of preferGameweeks) {
+      if (g < 1 || seen.has(g)) continue;
+      seen.add(g);
+      item = latestPurchasedItemForSlot(purchaseHistory, slot, g);
+      if (item) break;
+    }
+    if (!item && allowAnyGameweek) item = latestPurchasedItemForSlot(purchaseHistory, slot);
+    if (item) next = applyShopPurchaseToActive(next, item);
+  }
+  return next;
+}
+
+function hasPaidActiveBooster(ids: ShopItemId[]): boolean {
+  return ids.some((id) => {
+    if (id === "powerplay") return false;
+    const item = shopItemById(id);
+    return Boolean(item && isPaidBooster(item));
+  });
+}
+
+function shopAfterRollover(ownedItemIds: ShopItemId[], nextGameweek: number, purchaseHistory: ShopPurchaseRecord[]): TeamFantasyShopState {
+  const activeItemIds: ShopItemId[] = ["powerplay"];
+  for (const id of ownedItemIds) {
+    const item = shopItemById(id);
+    if (item?.permanent && !activeItemIds.includes(id)) activeItemIds.push(id);
+  }
   return {
-    ownedItemIds: ownedItemIds.includes("powerplay") ? ownedItemIds : (["powerplay", ...ownedItemIds] as ShopItemId[]),
-    activeItemIds,
-    activeGameweek: currentGameweek,
-    purchaseHistory: parsePurchaseHistory(o.purchaseHistory),
+    ownedItemIds,
+    activeItemIds: withPowerplay(activeItemIds),
+    activeGameweek: nextGameweek,
+    purchaseHistory,
+    luckyDipPlayerId: null,
+  };
+}
+
+/** Clear one-week boosters after End GW so next week starts clean. Permanent items stay on. */
+export function shopStateAfterGameweekEnd(shop: TeamFantasyShopState, nextGameweek: number): TeamFantasyShopState {
+  return shopAfterRollover(shop.ownedItemIds, coerceGameweek(nextGameweek) || 1, shop.purchaseHistory);
+}
+
+export function parseTeamFantasyShop(raw: unknown, currentGameweek: number): TeamFantasyShopState {
+  const gw = coerceGameweek(currentGameweek) || 1;
+  if (!raw || typeof raw !== "object") return emptyTeamFantasyShop(gw);
+  const o = raw as Record<string, unknown>;
+  const storedGw = coerceGameweek(o.activeGameweek);
+  const ownedItemIds = withPowerplay(filterShopItemIds(o.ownedItemIds, ["powerplay"]));
+  const purchaseHistory = parsePurchaseHistory(o.purchaseHistory);
+  const storedActive = withPowerplay(filterShopItemIds(o.activeItemIds, ["powerplay"]));
+  const liveWeekUnended = storedGw === gw || hasPaidActiveBooster(storedActive);
+
+  let activeItemIds: ShopItemId[];
+  let luckyDipPlayerId: number | null = null;
+  if (liveWeekUnended) {
+    // Keep whatever they bought for this live week, even if the purchase was stamped with the wrong GW.
+    activeItemIds = fillEmptySlotsFromPurchases(storedActive, purchaseHistory, [gw, storedGw], storedGw !== gw);
+    if (o.luckyDipPlayerId != null && Number.isFinite(Number(o.luckyDipPlayerId))) {
+      luckyDipPlayerId = Number(o.luckyDipPlayerId);
+    }
+  } else {
+    activeItemIds = reconstructActiveShopForGameweek(ownedItemIds, purchaseHistory, gw).activeItemIds;
+  }
+
+  return {
+    ownedItemIds,
+    activeItemIds: withPowerplay(activeItemIds),
+    activeGameweek: gw,
+    purchaseHistory,
     luckyDipPlayerId,
   };
 }
@@ -306,17 +454,7 @@ export function buildTeamFantasyShopAfterPurchase(args: {
 
   const ownedItemIds = shop.ownedItemIds.includes(item.id) ? shop.ownedItemIds : [...shop.ownedItemIds, item.id];
 
-  let activeItemIds = [...shop.activeItemIds];
-  const slot = shopActiveSlot(item);
-  if (slot === "scoring" || slot === "transfer") {
-    activeItemIds = activeItemIds.filter((id) => {
-      if (id === "powerplay") return true;
-      const active = shopItemById(id);
-      if (!active) return true;
-      return shopActiveSlot(active) !== slot;
-    });
-  }
-  if (!activeItemIds.includes(item.id)) activeItemIds.push(item.id);
+  const activeItemIds = applyShopPurchaseToActive(shop.activeItemIds, item);
 
   let luckyDipPlayerId = shop.luckyDipPlayerId ?? null;
   if (item.id === "lucky-dip") {

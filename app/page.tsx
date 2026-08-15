@@ -7527,6 +7527,13 @@ export default function Page() {
                   const playerBowlerBoost = Boolean(frozen?.bowlerBoost ?? shopRow?.bowlerBoost);
                   const hasShopBoost = batterBoost || playerBowlerBoost;
                   const showApplied = isC || isVC || isLuckyDip || isPowerplay || hasShopBoost;
+                  const lineForBd = hist ?? (teamModal.live && scoresThisGw && p ? p : null);
+                  const bd = lineForBd && scoresThisGw ? fantasyPointsBreakdown(lineForBd) : null;
+                  const bowlRaw = bd?.bowling ?? 0;
+                  const batRaw = bd?.batting ?? 0;
+                  const boostBits: string[] = [];
+                  if (batterBoost && batRaw > 0) boostBits.push(`bat ${batRaw}→${batRaw * 2}`);
+                  if (playerBowlerBoost && bowlRaw > 0) boostBits.push(`bowl ${bowlRaw}→${bowlRaw * 2}`);
                   return (
                     <div key={pid} className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3 ring-1 ring-white/10">
                       <div className="min-w-0">
@@ -7560,7 +7567,10 @@ export default function Page() {
                         </div>
                         <div className="text-base font-black text-white">{appliedPts}</div>
                         {showApplied ? (
-                          <div className="text-[10px] text-zinc-500">base {basePts}</div>
+                          <div className="text-[10px] leading-tight text-zinc-500">
+                            {boostBits.length ? <div>{boostBits.join(" · ")}</div> : null}
+                            <div>base {basePts}</div>
+                          </div>
                         ) : null}
                       </div>
                     </div>
